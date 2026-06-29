@@ -124,6 +124,19 @@ def cmd_author(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_tui(args: argparse.Namespace) -> int:
+    project = Path(args.project).resolve()
+    manifest = verify.load_manifest(project, args.manifest)
+    try:
+        from . import tui
+    except ModuleNotFoundError:
+        print("textual is not installed (needed for the TUI): uv add textual")
+        return 1
+    tui.run_dashboard(project, Path(args.impl).resolve(), manifest,
+                      sandbox_on=not args.no_sandbox, mutation=not args.no_mutation)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="holdtrue",
                                 description="review the guarantee, not the code")
@@ -154,6 +167,14 @@ def main(argv: list[str] | None = None) -> int:
     au.add_argument("--no-check", action="store_true",
                     help="skip the reference-oracle self-check")
     au.set_defaults(func=cmd_author)
+
+    tu = sub.add_parser("tui", help="live dashboard: run a verification and watch it stream")
+    tu.add_argument("project", help="path to the project-under-contract")
+    tu.add_argument("--impl", required=True, help="implementation file to verify")
+    tu.add_argument("--manifest", default="contract/manifest.yaml")
+    tu.add_argument("--no-sandbox", action="store_true")
+    tu.add_argument("--no-mutation", action="store_true")
+    tu.set_defaults(func=cmd_tui)
 
     args = p.parse_args(argv)
     return args.func(args)

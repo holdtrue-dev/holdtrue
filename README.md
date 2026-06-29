@@ -27,6 +27,6 @@ Swap in `controls/buggy.py` for a FAILED, or add `--manifest contract/manifest_w
 
 ## Status
 
-Early. Python pure functions, one domain, proven end to end. The implementer now runs as its own LLM context, scoped to the contract (`holdtrue implement`); giving the contract author its own context is next.
+Early. Python pure functions, one domain, proven end to end. Both the contract author and the implementer run as separate LLM contexts (`holdtrue author` / `holdtrue implement`), with your review in between. A single orchestrated run is next.
 
 Stack: deal + CrossHair (proof), Hypothesis (properties), cosmic-ray (mutation), mypy, bubblewrap. Python 3.12, managed with uv.

@@ -12,21 +12,23 @@ The verification loop, proven end to end on pure Python functions:
 - honest verdict: `GUARANTEED`, `UNGUARANTEED`, or `FAILED`
 - bubblewrap sandbox, evidence report, CI, a worked example and a demo
 
-## Next: two LLM contexts
+## Two LLM contexts (done)
 
-The implementer now runs as its own LLM context (`holdtrue implement`). holdtrue
-stages a workspace holding only the contract (spec plus shown tests) and an empty
-src file, spawns a fresh `claude` session scoped to it with `--add-dir` and tool
-limits, and verifies whatever it writes against the full contract. The intent,
-held-out tests, and reference oracle are absent from that workspace, so the curtain
-is the filesystem. Reuses existing auth, no API key.
+Both contexts run as separate `claude` sessions, and neither sees the other:
 
-Still to do:
+- `holdtrue author` reads the intent, writes the contract bundle, and self-checks
+  that its own reference oracle satisfies the contract.
+- you review and approve the contract.
+- `holdtrue implement` writes the code in a fresh context scoped to the contract
+  alone (the intent, held-out tests, and oracle are absent), then verifies it.
 
-- give the contract author its own context: read the intent, interrogate it, write
-  the contract bundle
-- have the orchestrator drive both, and re-spawn the implementer with pass/fail and
-  a counterexample until the stopping condition holds
+Shown end to end on a fresh `abs` intent: a separate implementer satisfied an
+author-written contract, verdict GUARANTEED.
+
+## Next: one orchestrated loop
+
+A single `holdtrue run` that chains author, freeze, implement, and verify, and
+re-spawns the implementer with a counterexample on failure.
 
 ## Then: never-silent revision
 

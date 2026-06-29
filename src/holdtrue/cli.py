@@ -82,6 +82,48 @@ def cmd_implement(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_author(args: argparse.Namespace) -> int:
+    if not agents.available():
+        print("claude CLI not found; cannot spawn the author.")
+        return 1
+    project = Path(args.project).resolve()
+    if not (project / "intent" / "intent.md").exists():
+        print("no intent/intent.md in the project.")
+        return 1
+    template = Path(args.template).resolve()
+    print(f"\nholdtrue author  {project.name}")
+    print("  spawning contract author in a separate context (reads intent, writes contract) ...")
+    agents.spawn_author(project, template)
+    if not (project / "contract" / "manifest.yaml").exists():
+        print("  author did not produce contract/manifest.yaml.")
+        return 1
+    manifest = verify.load_manifest(project, "contract/manifest.yaml")
+    print("-" * 72)
+    print(f"  intent_id : {manifest.get('intent_id')}")
+    print(f"  summary   : {manifest.get('summary')}")
+    print(f"  signature : {manifest.get('signature')}")
+    print("  contract (must hold):")
+    for d in manifest.get("checks", {}).get("crosshair", {}).get("decorators", []):
+        print(f"    {d}")
+    print("-" * 72)
+    ref = project / "contract_private" / "reference_impl.py"
+    if args.no_check or not ref.exists():
+        print("  (self-check skipped)\n")
+        return 0
+    print("  self-check: does the author's own reference oracle satisfy the contract?")
+    results, _ = verify.run_verification(project, ref, manifest,
+                                         sandbox_on=False, mutation=False, on_result=_on_result)
+    ch, pr = results.get("crosshair"), results.get("negative_probe")
+    ok = bool(ch and ch.status == "confirmed" and pr and pr.status == "pass")
+    print("-" * 72)
+    if ok:
+        print("  contract is provable and non-vacuous. Review it, then run `holdtrue implement`.\n")
+        return 0
+    print("  WARNING: contract did not self-check (the reference oracle does not satisfy it,")
+    print("  or the contract is not CrossHair-provable). Review before implementing.\n")
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="holdtrue",
                                 description="review the guarantee, not the code")
@@ -103,6 +145,15 @@ def main(argv: list[str] | None = None) -> int:
     im.add_argument("--no-sandbox", action="store_true")
     im.add_argument("--no-mutation", action="store_true")
     im.set_defaults(func=cmd_implement)
+
+    au = sub.add_parser("author",
+                        help="spawn a separate LLM context to write the contract from intent")
+    au.add_argument("project", help="path to the project-under-contract")
+    au.add_argument("--template", default="examples/clamp",
+                    help="a contract bundle to use as a format example")
+    au.add_argument("--no-check", action="store_true",
+                    help="skip the reference-oracle self-check")
+    au.set_defaults(func=cmd_author)
 
     args = p.parse_args(argv)
     return args.func(args)

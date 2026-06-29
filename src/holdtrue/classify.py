@@ -67,62 +67,48 @@ def classify(intent_id: str, results: dict[str, CheckResult]) -> Classification:
         )
 
     # --- 2. No failures: is it GUARANTEED? ---------------------------------- #
-    reasons: list[str] = []
+    # GUARANTEED rests on a sound exhaustive proof plus a non-vacuous contract:
+    #   - CrossHair exhausted and confirmed the contract over the whole domain, and
+    #   - the negative-probe shows the contract rejects broken implementations, and
+    #   - types are clean.
+    # Mutation measures test-suite strength, which is moot once the spec is proven
+    # over every input, so it is reported but is not a gate. A function with no
+    # mutable nodes (mutation = na) is the common case here, not a disqualifier.
     proven = bool(crosshair and crosshair.status == "confirmed")
     probe_ok = bool(probe and probe.status == "pass")
-    mutation_ok = bool(mutation and mutation.status == "pass")
     types_ok = bool(types and types.status == "pass")
 
-    if proven and probe_ok and mutation_ok and types_ok:
+    if proven and probe_ok and types_ok:
+        reasons = [
+            f"proof: {crosshair.detail}",
+            f"negative-probe: {probe.detail}",
+            f"types: {types.detail}",
+        ]
+        if mutation:
+            reasons.append(f"mutation ({mutation.status}): {mutation.detail}")
         return Classification(
             intent_id, GUARANTEED, crosshair.check_id,
-            "CrossHair exhausted all paths and confirmed the contract over the whole "
-            "input domain; mutation-backed and survives the negative-probe.",
-            requires_human_code_review=False,
-            reasons=[
-                f"proof: {crosshair.detail}",
-                f"mutation: {mutation.detail}",
-                f"negative-probe: {probe.detail}",
-                f"types: {types.detail}",
-            ],
+            "Proven exhaustively over the input domain, against a contract the "
+            "negative-probe shows is non-vacuous.",
+            requires_human_code_review=False, reasons=reasons,
         )
 
     # --- 3. Otherwise UNGUARANTEED, with the honest reason ------------------ #
     if proven and not probe_ok:
-        reasons.append(
-            "Downgraded: CrossHair confirmed the implementation, but the negative-probe "
-            "shows the contract is too weak. It also accepts broken implementations, so "
-            "a pass here would mean nothing."
-        )
+        reasons = ["Downgraded: CrossHair confirmed the implementation, but the "
+                   "negative-probe shows the contract is too weak. It also accepts broken "
+                   "implementations, so a pass here would mean nothing."]
         deciding = probe.check_id if probe else "negative_probe"
         evidence = probe.detail if probe else ""
         if probe and probe.extra.get("survivors"):
             evidence += " survivors: " + ", ".join(
                 s["body"] for s in probe.extra["survivors"])
-    elif not proven:
-        reasons.append(
-            "No proof: CrossHair did not exhaust all paths "
-            f"({crosshair.detail if crosshair else 'not run'}). The rest of the evidence "
-            "is sampled only, so this still needs human code review."
-        )
+    else:
+        reasons = ["No proof: CrossHair did not exhaust all paths "
+                   f"({crosshair.detail if crosshair else 'not run'}). The rest of the "
+                   "evidence is sampled only, so this still needs human code review."]
         deciding = crosshair.check_id if crosshair else "crosshair"
         evidence = crosshair.detail if crosshair else ""
-    elif not mutation_ok:
-        if mutation and mutation.status == "na":
-            reasons.append(
-                "No mutation backing: the implementation has no mutable nodes, so the "
-                "contract's strength cannot be measured here. Not enough for GUARANTEED "
-                "on its own.")
-        else:
-            reasons.append(
-                f"Mutation below threshold: {mutation.detail if mutation else 'not run'}. "
-                "The contract may be too weak to catch real faults.")
-        deciding = mutation.check_id if mutation else "mutation"
-        evidence = mutation.detail if mutation else ""
-    else:
-        reasons.append("Not all GUARANTEED conditions met.")
-        deciding = "composite"
-        evidence = ""
 
     return Classification(
         intent_id, UNGUARANTEED, deciding, evidence,

@@ -38,3 +38,11 @@ def test_weak_contract_is_downgraded_by_negative_probe():
     cls = _verify("correct.py", manifest="contract/manifest_weak.yaml", mutation=False)
     assert cls.classification == UNGUARANTEED
     assert "negprobe" in cls.deciding_check.lower()
+
+
+def test_terse_correct_is_guaranteed_without_mutation_backing():
+    # The terse form has no mutable nodes, so mutation is NA. A sound proof plus
+    # the negative-probe still earn GUARANTEED; mutation is not a gate.
+    cls = _verify("correct_terse.py")
+    assert cls.classification == GUARANTEED
+    assert cls.deciding_check == "CHK-symbolic"

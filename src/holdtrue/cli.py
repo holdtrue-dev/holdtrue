@@ -1,44 +1,31 @@
 """holdtrue CLI.
 
 `holdtrue verify <project> --impl <file>` runs the contract against an
-implementation and writes an evidence report. For now a human or script plays
-both author and implementer; the two-context LLM split comes next.
+implementation. `holdtrue implement <project>` spawns a separate LLM context that
+writes the implementation from the contract alone, then verifies it.
 """
 from __future__ import annotations
 
 import argparse
 import sys
+import tempfile
 from pathlib import Path
 
-from . import engine, report, verify
+from . import agents, engine, report, verify
 
 
-def cmd_verify(args: argparse.Namespace) -> int:
-    project = Path(args.project).resolve()
-    manifest = verify.load_manifest(project, args.manifest)
-    sb = not args.no_sandbox
+def _on_result(r: engine.CheckResult) -> None:
+    print(f"  {r.status.upper():11} {r.kind:18} {r.detail[:60]}")
 
-    print(f"\nholdtrue verify  {manifest['intent_id']}  impl={Path(args.impl).name}"
-          f"  sandbox={'bwrap' if sb and engine.sandbox.bwrap_available() else 'off'}")
-    print("-" * 72)
 
-    def on_result(r: engine.CheckResult) -> None:
-        print(f"  {r.status.upper():11} {r.kind:18} {r.detail[:60]}")
-
-    if args.no_mutation:
-        print("  (mutation skipped)")
-    results, cls = verify.run_verification(
-        project, Path(args.impl).resolve(), manifest,
-        sandbox_on=sb, mutation=not args.no_mutation, on_result=on_result)
-
-    rep = report.build_report(manifest, Path(args.impl).name, results, cls,
+def _finish(project: Path, impl_label: str, manifest: dict, results: dict,
+            cls, sb: bool) -> None:
+    rep = report.build_report(manifest, impl_label, results, cls,
                               sandboxed=(sb and engine.sandbox.bwrap_available()))
-
     out_dir = project / "reports"
     out_dir.mkdir(exist_ok=True)
     (out_dir / "evidence_report.json").write_text(report.to_json(rep), encoding="utf-8")
     (out_dir / "evidence_report.md").write_text(report.render_md(rep), encoding="utf-8")
-
     print("-" * 72)
     badge = report._BADGE.get(cls.classification, cls.classification)
     print(f"  VERDICT: {badge}    (deciding: {cls.deciding_check})")
@@ -47,6 +34,51 @@ def cmd_verify(args: argparse.Namespace) -> int:
     print(f"  human code review still required: "
           f"{'YES' if cls.requires_human_code_review else 'no'}")
     print(f"  report: {out_dir / 'evidence_report.md'}\n")
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    project = Path(args.project).resolve()
+    manifest = verify.load_manifest(project, args.manifest)
+    sb = not args.no_sandbox
+    print(f"\nholdtrue verify  {manifest['intent_id']}  impl={Path(args.impl).name}"
+          f"  sandbox={'bwrap' if sb and engine.sandbox.bwrap_available() else 'off'}")
+    print("-" * 72)
+    if args.no_mutation:
+        print("  (mutation skipped)")
+    results, cls = verify.run_verification(
+        project, Path(args.impl).resolve(), manifest,
+        sandbox_on=sb, mutation=not args.no_mutation, on_result=_on_result)
+    _finish(project, Path(args.impl).name, manifest, results, cls, sb)
+    return 0
+
+
+def cmd_implement(args: argparse.Namespace) -> int:
+    if not agents.available():
+        print("claude CLI not found; cannot spawn the implementer.")
+        return 1
+    project = Path(args.project).resolve()
+    manifest = verify.load_manifest(project, args.manifest)
+    ws = Path(tempfile.mkdtemp(prefix="holdtrue_impl_"))
+    agents.stage_workspace(project, manifest, ws)
+    print(f"\nholdtrue implement  {manifest['intent_id']}")
+    print("  spawning implementer in a separate context (sees only the contract) ...")
+    impl_path, _ = agents.spawn_implementer(ws, manifest)
+    if not impl_path.exists() or "NotImplementedError" in impl_path.read_text():
+        print("  implementer did not produce an implementation.")
+        return 1
+    print("-" * 72)
+    print(impl_path.read_text().rstrip())
+    print("-" * 72)
+    if args.no_verify:
+        print(f"  implementation: {impl_path}\n")
+        return 0
+    sb = not args.no_sandbox
+    if args.no_mutation:
+        print("  (mutation skipped)")
+    results, cls = verify.run_verification(
+        project, impl_path, manifest,
+        sandbox_on=sb, mutation=not args.no_mutation, on_result=_on_result)
+    _finish(project, "implementer (llm)", manifest, results, cls, sb)
     return 0
 
 
@@ -54,14 +86,24 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="holdtrue",
                                 description="review the guarantee, not the code")
     sub = p.add_subparsers(dest="command", required=True)
+
     v = sub.add_parser("verify", help="run a contract against an implementation")
     v.add_argument("project", help="path to the project-under-contract")
     v.add_argument("--impl", required=True, help="implementation file to verify")
-    v.add_argument("--manifest", default="contract/manifest.yaml",
-                   help="manifest path (relative to project, or absolute)")
+    v.add_argument("--manifest", default="contract/manifest.yaml")
     v.add_argument("--no-sandbox", action="store_true", help="run unsandboxed")
     v.add_argument("--no-mutation", action="store_true", help="skip mutation testing")
     v.set_defaults(func=cmd_verify)
+
+    im = sub.add_parser("implement",
+                        help="spawn a separate LLM context to implement, then verify")
+    im.add_argument("project", help="path to the project-under-contract")
+    im.add_argument("--manifest", default="contract/manifest.yaml")
+    im.add_argument("--no-verify", action="store_true", help="implement only, skip verify")
+    im.add_argument("--no-sandbox", action="store_true")
+    im.add_argument("--no-mutation", action="store_true")
+    im.set_defaults(func=cmd_implement)
+
     args = p.parse_args(argv)
     return args.func(args)
 

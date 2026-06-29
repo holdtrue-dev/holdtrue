@@ -8,13 +8,11 @@
   prove it. don't read it.
 ```
 
-holdtrue checks an implementation against a contract you approve, then tells you
-what is actually guaranteed. You review the contract, not the code.
+holdtrue checks an implementation against a contract you approve, then tells you what is actually guaranteed. You review the contract, not the code.
 
 It runs the contract and reports, per intent:
 
-- `GUARANTEED`: proven over all inputs, with a contract strong enough to catch
-  injected bugs and reject broken stand-ins.
+- `GUARANTEED`: proven over all inputs, with a contract strong enough to catch injected bugs and reject broken stand-ins.
 - `UNGUARANTEED`: only sampled evidence. Still needs human review.
 - `FAILED`: a counterexample, with the input that breaks it.
 
@@ -25,15 +23,10 @@ uv run python -m holdtrue.cli verify examples/clamp \
   --impl examples/clamp/controls/correct.py
 ```
 
-Swap in `controls/buggy.py` for a FAILED, or add `--manifest
-contract/manifest_weak.yaml` to watch a correct function get refused a guarantee
-because the contract itself is too weak.
+Swap in `controls/buggy.py` for a FAILED, or add `--manifest contract/manifest_weak.yaml` to watch a correct function get refused a guarantee because the contract itself is too weak.
 
 ## Status
 
-Early. Python pure functions, one domain, proven end to end. The contract author
-and the implementer run as separate steps today; splitting them into separate
-LLM contexts is next.
+Early. Python pure functions, one domain, proven end to end. The implementer now runs as its own LLM context, scoped to the contract (`holdtrue implement`); giving the contract author its own context is next.
 
-Stack: deal + CrossHair (proof), Hypothesis (properties), cosmic-ray (mutation),
-mypy, bubblewrap. Python 3.12, managed with uv.
+Stack: deal + CrossHair (proof), Hypothesis (properties), cosmic-ray (mutation), mypy, bubblewrap. Python 3.12, managed with uv.

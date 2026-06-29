@@ -1,0 +1,40 @@
+# holdtrue contract manifest. The human-reviewed source of truth.
+version: 1
+intent_id: INT-001
+summary: "clamp(x, lo, hi) returns x confined to [lo, hi]; requires lo <= hi."
+signature: "clamp(x: int, lo: int, hi: int) -> int"
+function: clamp
+
+# Which axes of intent were interrogated. Shown in the report so gaps stay visible.
+interrogated_axes:
+  - range (lo <= result <= hi)
+  - boundary (x in range returns x)
+  - precondition (lo <= hi)
+  - exact value (result == min(max(x, lo), hi))
+  - raises nothing
+
+checks:
+  # Spliced onto the implementer's function; CrossHair proves them over all ints.
+  crosshair:
+    decorators:
+      - "@deal.pre(lambda x, lo, hi: lo <= hi)"
+      - "@deal.ensure(lambda x, lo, hi, result: lo <= result <= hi)"
+      - "@deal.ensure(lambda x, lo, hi, result: result == min(max(x, lo), hi))"
+      - "@deal.raises()"
+    guarantee_if_exhausted: GUARANTEED
+
+  hypothesis_shown: "tests_shown/test_clamp.py"               # implementer may read
+  hypothesis_heldout: "tests_heldout/test_clamp_heldout.py"   # implementer never sees
+  mutation:
+    threshold: 0.85
+
+# Each broken body must be rejected by the contract, or the intent is downgraded.
+negative_probe:
+  must_reject:
+    - "return lo"
+    - "return hi"
+    - "return x"
+    - "return lo + 1"
+
+acceptance:
+  target_class: GUARANTEED

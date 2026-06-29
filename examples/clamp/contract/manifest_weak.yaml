@@ -1,0 +1,35 @@
+# A weak version of the contract: same as manifest.yaml but missing the exact-value
+# postcondition. CrossHair will confirm a broken `return lo` against it. The
+# negative-probe is what catches that the contract is too weak.
+version: 1
+intent_id: INT-001-WEAK
+summary: "clamp(x, lo, hi) returns a value in [lo, hi]; requires lo <= hi. (no value pin)"
+signature: "clamp(x: int, lo: int, hi: int) -> int"
+function: clamp
+
+interrogated_axes:
+  - range (lo <= result <= hi)
+  - precondition (lo <= hi)
+  - raises nothing
+
+checks:
+  crosshair:
+    decorators:
+      - "@deal.pre(lambda x, lo, hi: lo <= hi)"
+      - "@deal.ensure(lambda x, lo, hi, result: lo <= result <= hi)"
+      - "@deal.raises()"
+    guarantee_if_exhausted: GUARANTEED
+  hypothesis_shown: "tests_shown/test_clamp.py"
+  hypothesis_heldout: "tests_heldout/test_clamp_heldout.py"
+  mutation:
+    threshold: 0.85
+
+negative_probe:
+  must_reject:
+    - "return lo"
+    - "return hi"
+    - "return x"
+    - "return lo + 1"
+
+acceptance:
+  target_class: GUARANTEED

@@ -25,12 +25,15 @@ Both contexts run as separate `claude` sessions, and neither sees the other:
 Shown end to end on a fresh `abs` intent: a separate implementer satisfied an
 author-written contract, verdict GUARANTEED.
 
-## Next: one orchestrated loop
+## One orchestrated loop (done)
 
-A single `holdtrue run` that chains author, freeze, implement, and verify, and
-re-spawns the implementer with a counterexample on failure.
+`holdtrue run` chains it all in one command: the author writes the contract,
+holdtrue self-checks it against the reference oracle, you approve, then the
+implementer fills it in and it gets verified. A FAILED round re-spawns the
+implementer with the counterexample, bounded by `--max-rounds`. Shown on a fresh
+`square` intent: GUARANTEED in one round.
 
-## Then: never-silent revision
+## Next: never-silent revision
 
 When verification shows the contract or the intent was wrong, propose the change
 back to the human with its justification, record it in a changelog, and re-run.

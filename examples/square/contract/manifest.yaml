@@ -1,0 +1,38 @@
+# holdtrue contract manifest. The human-reviewed source of truth.
+version: 1
+intent_id: INT-002
+summary: "square(x) returns x times itself; the result is never negative."
+signature: "square(x: int) -> int"
+function: square
+
+# Which axes of intent were interrogated. Shown in the report so gaps stay visible.
+interrogated_axes:
+  - exact value (result == x * x)
+  - sign (result >= 0)
+  - no precondition (defined for every int)
+  - raises nothing
+
+checks:
+  # Spliced onto the implementer's function; CrossHair proves them over all ints.
+  crosshair:
+    decorators:
+      - "@deal.ensure(lambda x, result: result == x * x)"
+      - "@deal.ensure(lambda x, result: result >= 0)"
+      - "@deal.raises()"
+    guarantee_if_exhausted: GUARANTEED
+
+  hypothesis_shown: "tests_shown/test_square.py"               # implementer may read
+  hypothesis_heldout: "tests_heldout/test_square_heldout.py"   # implementer never sees
+  mutation:
+    threshold: 0.85
+
+# Each broken body must be rejected by the contract, or the intent is downgraded.
+negative_probe:
+  must_reject:
+    - "return 0"
+    - "return x"
+    - "return x + x"
+    - "return abs(x)"
+
+acceptance:
+  target_class: GUARANTEED

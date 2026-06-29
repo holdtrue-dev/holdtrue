@@ -12,6 +12,7 @@ import tempfile
 from pathlib import Path
 
 from . import agents, engine, report, verify
+from .classify import FAILED
 
 
 def _on_result(r: engine.CheckResult) -> None:
@@ -137,6 +138,75 @@ def cmd_tui(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run(args: argparse.Namespace) -> int:
+    """The full loop: author -> self-check -> approve -> implement -> verify,
+    re-spawning the implementer with a counterexample on a FAILED round."""
+    if not agents.available():
+        print("claude CLI not found; cannot spawn the agents.")
+        return 1
+    project = Path(args.project).resolve()
+    if not (project / "intent" / "intent.md").exists():
+        print("no intent/intent.md in the project.")
+        return 1
+    sb = not args.no_sandbox
+
+    if not args.skip_author:
+        print("\n[1] author: writing the contract in a separate context ...")
+        agents.spawn_author(project, Path(args.template).resolve())
+    if not (project / "contract" / "manifest.yaml").exists():
+        print("  no contract present.")
+        return 1
+    manifest = verify.load_manifest(project, args.manifest)
+
+    print("\n[2] self-check: does the contract hold for the author's reference oracle?")
+    ref = project / "contract_private" / "reference_impl.py"
+    sc, _ = verify.run_verification(project, ref, manifest, sandbox_on=False,
+                                    mutation=False, on_result=_on_result)
+    ch, pr = sc.get("crosshair"), sc.get("negative_probe")
+    if not (ch and ch.status == "confirmed" and pr and pr.status == "pass"):
+        print("  contract failed self-check (wrong-contract). Stopping.")
+        return 1
+
+    print("\n  contract:")
+    print(f"    {manifest.get('signature')}")
+    for d in manifest.get("checks", {}).get("crosshair", {}).get("decorators", []):
+        print(f"    {d}")
+    if not args.yes:
+        try:
+            ans = input("\n[3] approve this contract and implement? [y/N] ").strip().lower()
+        except EOFError:
+            ans = "n"
+        if ans != "y":
+            print("  not approved. Stopping (the contract is yours).")
+            return 0
+    else:
+        print("\n[3] contract approved (--yes).")
+
+    ws = Path(tempfile.mkdtemp(prefix="holdtrue_run_"))
+    agents.stage_workspace(project, manifest, ws)
+    feedback, results, cls = None, None, None
+    for rnd in range(1, args.max_rounds + 1):
+        print(f"\n[4] implement (round {rnd}/{args.max_rounds}) in a separate context ...")
+        impl_path, _ = agents.spawn_implementer(ws, manifest, feedback=feedback)
+        if not impl_path.exists() or "NotImplementedError" in impl_path.read_text():
+            print("  implementer produced nothing.")
+            return 1
+        print(impl_path.read_text().rstrip())
+        results, cls = verify.run_verification(project, impl_path, manifest,
+                                               sandbox_on=sb, mutation=not args.no_mutation,
+                                               on_result=_on_result)
+        if cls.classification != FAILED:
+            break
+        cex = (results.get("crosshair").counterexample if results.get("crosshair") else None)
+        feedback = f"{cls.evidence}" + (f" counterexample: {cex}" if cex else "")
+        print(f"  round {rnd} FAILED; re-spawning with: {cex or cls.evidence}")
+
+    _finish(project, "run (author + implementer)", manifest, results, cls, sb)
+    if cls and cls.classification == FAILED:
+        print("  reached max rounds without passing: UNRESOLVED.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="holdtrue",
                                 description="review the guarantee, not the code")
@@ -175,6 +245,20 @@ def main(argv: list[str] | None = None) -> int:
     tu.add_argument("--no-sandbox", action="store_true")
     tu.add_argument("--no-mutation", action="store_true")
     tu.set_defaults(func=cmd_tui)
+
+    ru = sub.add_parser("run",
+                        help="full loop: author -> approve -> implement -> verify (re-spawn on failure)")
+    ru.add_argument("project", help="path to the project-under-contract")
+    ru.add_argument("--manifest", default="contract/manifest.yaml")
+    ru.add_argument("--template", default="examples/clamp",
+                    help="a contract bundle the author uses as a format example")
+    ru.add_argument("--skip-author", action="store_true",
+                    help="use the existing contract; do not re-author")
+    ru.add_argument("--yes", action="store_true", help="approve the contract without prompting")
+    ru.add_argument("--max-rounds", type=int, default=3)
+    ru.add_argument("--no-sandbox", action="store_true")
+    ru.add_argument("--no-mutation", action="store_true")
+    ru.set_defaults(func=cmd_run)
 
     args = p.parse_args(argv)
     return args.func(args)

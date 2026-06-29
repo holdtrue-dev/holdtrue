@@ -67,12 +67,19 @@ def stage_workspace(project: Path, manifest: dict, dest: Path) -> Path:
     return dest
 
 
-def spawn_implementer(workspace: Path, manifest: dict, *,
+def spawn_implementer(workspace: Path, manifest: dict, *, feedback: str | None = None,
                       timeout: float = 300.0) -> tuple[Path, str]:
     """Run a fresh, scoped claude session that writes src/core.py. Returns the
-    path to the written file and the session's text output."""
+    path to the written file and the session's text output.
+
+    On a re-spawn, `feedback` carries the counterexample from the failed round; the
+    previous attempt is still in src/core.py for the session to fix."""
     prompt = _PROMPT.format(signature=manifest["signature"],
                             function=manifest.get("function", "clamp"))
+    if feedback:
+        prompt += ("\n\nThe current src/core.py is a previous attempt that FAILED "
+                   f"verification:\n{feedback}\nFix src/core.py so the contract holds for "
+                   "that input and for every other input in the domain.")
     cmd = [CLAUDE, "-p", prompt,
            "--add-dir", str(workspace),
            "--allowed-tools", "Read Edit Write",

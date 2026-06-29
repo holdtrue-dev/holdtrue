@@ -218,20 +218,17 @@ def run_mutation(check_id: str, impl_source: str, test_files: dict[str, str],
             'name = "local"\n',
             encoding="utf-8",
         )
-        # cosmic-ray spawns its own test subprocesses; run it directly (not in bwrap).
-        env = dict(os.environ)
-        env.pop("VIRTUAL_ENV", None)
-        import subprocess
-        init = subprocess.run([COSMIC_RAY, "init", "cr.toml", "cr.sqlite"],
-                              cwd=work, capture_output=True, text=True, timeout=60)
-        if init.returncode != 0:
+        # cosmic-ray spawns its own pytest subprocesses; run it tracked (not in bwrap)
+        # so it can be aborted as a whole group.
+        rc_init, _, err_init = sandbox.popen_run(
+            [COSMIC_RAY, "init", "cr.toml", "cr.sqlite"], cwd=work, timeout=60)
+        if rc_init != 0:
             return CheckResult(check_id, "mutation", "na",
-                               detail=f"cosmic-ray init failed: {init.stderr[:200]}")
-        ex = subprocess.run([COSMIC_RAY, "exec", "cr.toml", "cr.sqlite"],
-                            cwd=work, capture_output=True, text=True, timeout=timeout)
-        rep = subprocess.run([CR_REPORT, "cr.sqlite"], cwd=work,
-                             capture_output=True, text=True, timeout=60)
-        total, surviving = _parse_cr_report(rep.stdout)
+                               detail=f"cosmic-ray init failed: {err_init[:200]}")
+        sandbox.popen_run([COSMIC_RAY, "exec", "cr.toml", "cr.sqlite"],
+                          cwd=work, timeout=timeout)
+        _, rep_out, _ = sandbox.popen_run([CR_REPORT, "cr.sqlite"], cwd=work, timeout=60)
+        total, surviving = _parse_cr_report(rep_out)
         if total == 0:
             return CheckResult(check_id, "mutation", "na",
                                detail="no mutable nodes in the implementation, so "

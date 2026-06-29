@@ -11,7 +11,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import agents, engine, report, verify
+from . import agents, engine, report, sandbox, verify
 from .classify import FAILED
 
 
@@ -261,7 +261,12 @@ def main(argv: list[str] | None = None) -> int:
     ru.set_defaults(func=cmd_run)
 
     args = p.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except KeyboardInterrupt:
+        sandbox.abort_all()
+        print("\naborted.")
+        return 130
 
 
 if __name__ == "__main__":

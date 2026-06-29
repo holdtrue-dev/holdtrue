@@ -2,20 +2,33 @@
 
 `holdtrue tui <project> --impl <file>` runs the contract against the implementation,
 steps through the checks with a spinner, and lands the verdict. Select a check and
-press enter to drill into its full detail.
+press enter to drill into its full detail. Pressing q while a run is in flight asks
+to confirm, and aborts the running subprocesses.
 """
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from rich.text import Text
-from textual import work
 from textual.app import App, ComposeResult
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Static
 
-from . import engine, verify
+from . import engine, sandbox, verify
 from .classify import Classification, FAILED, GUARANTEED, UNGUARANTEED
+
+# The turnstile logo and the wordmark, side by side (hardcoded: pyfiglet is not a
+# runtime dependency). Matches the brand banner.
+_LOGO = ["|   ", "|   ", "|-- ", "|   ", "|   "]
+_WORDMARK = [
+    ' _           _     _ _                   ',
+    '| |__   ___ | | __| | |_ _ __ _   _  ___ ',
+    "| '_ \\ / _ \\| |/ _` | __| '__| | | |/ _ \\",
+    '| | | | (_) | | (_| | |_| |  | |_| |  __/',
+    '|_| |_|\\___/|_|\\__,_|\\__|_|   \\__,_|\\___|',
+]
+_BANNER = "\n".join(f"{lo}  {wm}" for lo, wm in zip(_LOGO, _WORDMARK))
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _ICON = {"pass": "✓", "confirmed": "✓", "fail": "✗", "refuted": "✗",
@@ -63,12 +76,37 @@ class CheckDetail(ModalScreen):
         self.app.pop_screen()
 
 
+class QuitConfirm(ModalScreen):
+    """Confirm quitting while a run is still in flight."""
+
+    BINDINGS = [("y", "confirm", "quit and abort"), ("n", "cancel", "stay"),
+                ("escape", "cancel", "stay")]
+    CSS = """
+    QuitConfirm { align: center middle; }
+    #quitbox { width: 58; height: auto; border: round #f3c54e; background: #0c120c;
+               padding: 1 2; color: #cdddd2; }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Static("a verification is still running.\n\nquit and abort it?   "
+                     "[#33ff66]y[/] / [#7e9387]n[/]", id="quitbox")
+
+    def action_confirm(self) -> None:
+        self.app._quitting = True
+        sandbox.abort_all()
+        self.app.exit()
+
+    def action_cancel(self) -> None:
+        self.app.pop_screen()
+
+
 class HoldtrueTUI(App):
     CSS = """
     Screen { background: #07090a; color: #cdddd2; }
-    #title { color: #33ff66; text-style: bold; padding: 1 2 0 2; }
+    #logo { color: #33ff66; text-style: bold; padding: 1 2 0 2; }
+    #meta { color: #2bbf57; padding: 1 2 0 2; }
     #summary { color: #7e9387; padding: 0 2 1 2; }
-    #contract { color: #2bbf57; border: round #18241d; margin: 0 2 1 2; padding: 0 1; }
+    #contract { color: #2bbf57; margin: 0 2 1 3; }
     DataTable { background: #07090a; margin: 0 2; height: auto; scrollbar-size: 0 0; }
     DataTable > .datatable--header { background: #07090a; color: #506054; text-style: none; }
     DataTable > .datatable--cursor { background: #14201a; }
@@ -79,7 +117,7 @@ class HoldtrueTUI(App):
     #verdict.warn { color: #f3c54e; border: heavy #f3c54e; }
     #verdict.bad { color: #ff5f5f; border: heavy #ff5f5f; }
     """
-    BINDINGS = [("q", "quit", "quit")]
+    BINDINGS = [("q", "request_quit", "quit")]
 
     def __init__(self, project: Path, impl: Path, manifest: dict,
                  sandbox_on: bool, mutation: bool) -> None:
@@ -97,10 +135,12 @@ class HoldtrueTUI(App):
         self._spin_i = 0
         self._done = False
         self._results: dict[str, engine.CheckResult] = {}
+        self._quitting = False
 
     def compose(self) -> ComposeResult:
         m = self._manifest
-        yield Static(f"holdtrue   {m.get('intent_id')}   impl={self._impl.name}", id="title")
+        yield Static(_BANNER, id="logo")
+        yield Static(f"{m.get('intent_id')}   impl={self._impl.name}", id="meta")
         yield Static(m.get("summary", ""), id="summary")
         decos = "\n".join(m.get("checks", {}).get("crosshair", {}).get("decorators", []))
         yield Static(f"{m.get('signature')}\n{decos}", id="contract")
@@ -120,7 +160,17 @@ class HoldtrueTUI(App):
                       Text("queued", style=_QUEUED), Text(""), key=k)
         t.focus()
         self.set_interval(0.09, self._spin)
-        self._run()
+        # A daemon thread (not a Textual worker): the interpreter kills it on exit,
+        # so quitting never blocks on a running check. abort_all() kills the
+        # subprocesses so nothing is orphaned.
+        threading.Thread(target=self._run_verification, daemon=True).start()
+
+    def action_request_quit(self) -> None:
+        if self._done:
+            self._quitting = True
+            self.exit()
+        else:
+            self.push_screen(QuitConfirm())
 
     def _spin(self) -> None:
         if self._done or self._running >= len(self._order):
@@ -132,14 +182,22 @@ class HoldtrueTUI(App):
         t.update_cell(k, "icon", Text(frame, style=_RUN))
         t.update_cell(k, "status", Text("running", style=_RUN))
 
-    @work(thread=True)
-    def _run(self) -> None:
-        def on_result(r: engine.CheckResult) -> None:
-            self.call_from_thread(self._update, r)
-        _, cls = verify.run_verification(
-            self._project, self._impl, self._manifest,
-            sandbox_on=self._sandbox_on, mutation=self._mutation, on_result=on_result)
-        self.call_from_thread(self._finish, cls)
+    def _run_verification(self) -> None:
+        def safe(fn, *a) -> None:
+            if self._quitting:
+                return
+            try:
+                self.call_from_thread(fn, *a)
+            except Exception:
+                pass
+        try:
+            _, cls = verify.run_verification(
+                self._project, self._impl, self._manifest,
+                sandbox_on=self._sandbox_on, mutation=self._mutation,
+                on_result=lambda r: safe(self._update, r))
+        except Exception:
+            return
+        safe(self._finish, cls)
 
     def _update(self, r: engine.CheckResult) -> None:
         self._results[r.kind] = r

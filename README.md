@@ -12,6 +12,10 @@ It runs the contract and reports, per intent:
 - `UNGUARANTEED`: only sampled evidence. Still needs human review.
 - `FAILED`: a counterexample, with the input that breaks it.
 
+## How it works
+
+![holdtrue architecture](assets/architecture.png)
+
 ## Try it
 
 ```

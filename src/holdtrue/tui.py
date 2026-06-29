@@ -1,7 +1,8 @@
 """A live terminal dashboard for a holdtrue verification, built with Textual.
 
 `holdtrue tui <project> --impl <file>` runs the contract against the implementation,
-steps through the checks with a spinner, and lands the verdict.
+steps through the checks with a spinner, and lands the verdict. Select a check and
+press enter to drill into its full detail.
 """
 from __future__ import annotations
 
@@ -10,6 +11,7 @@ from pathlib import Path
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
+from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Static
 
 from . import engine, verify
@@ -29,6 +31,38 @@ _QUEUED = "#3a4a40"
 _RUN = "#f3c54e"
 
 
+class CheckDetail(ModalScreen):
+    """Full detail for one check, overlaid on the dashboard."""
+
+    BINDINGS = [("escape", "dismiss", "back"), ("q", "dismiss", "back")]
+    CSS = """
+    CheckDetail { align: center middle; }
+    #detailbox { width: 84%; max-width: 96; height: auto; max-height: 80%;
+                 border: round #2bbf57; background: #0c120c; padding: 1 2; }
+    """
+
+    def __init__(self, r: engine.CheckResult) -> None:
+        super().__init__()
+        self._r = r
+
+    def compose(self) -> ComposeResult:
+        r = self._r
+        color = _COLOR.get(r.status, "#73897c")
+        lines = [f"[b]{_LABEL.get(r.kind, r.kind)}[/b]  ([{color}]{r.status}[/])  "
+                 f"[dim]{r.check_id}[/dim]", "", r.detail]
+        if r.counterexample:
+            lines += ["", f"[#ff5f5f]counterexample:[/] {r.counterexample}"]
+        if r.extra:
+            lines.append("")
+            for k, val in r.extra.items():
+                lines.append(f"  [dim]{k}:[/] {val}")
+        lines += ["", "[dim]esc to go back[/dim]"]
+        yield Static("\n".join(lines), id="detailbox")
+
+    def action_dismiss(self) -> None:
+        self.app.pop_screen()
+
+
 class HoldtrueTUI(App):
     CSS = """
     Screen { background: #07090a; color: #cdddd2; }
@@ -37,6 +71,8 @@ class HoldtrueTUI(App):
     #contract { color: #2bbf57; border: round #18241d; margin: 0 2 1 2; padding: 0 1; }
     DataTable { background: #07090a; margin: 0 2; height: auto; scrollbar-size: 0 0; }
     DataTable > .datatable--header { background: #07090a; color: #506054; text-style: none; }
+    DataTable > .datatable--cursor { background: #14201a; }
+    #hint { color: #506054; padding: 0 2; }
     #verdict { margin: 1 2; padding: 1 2; text-align: center; text-style: bold;
                border: heavy #18241d; color: #7e9387; }
     #verdict.ok { color: #33ff66; border: heavy #33ff66; }
@@ -60,6 +96,7 @@ class HoldtrueTUI(App):
         self._running = 0
         self._spin_i = 0
         self._done = False
+        self._results: dict[str, engine.CheckResult] = {}
 
     def compose(self) -> ComposeResult:
         m = self._manifest
@@ -67,7 +104,8 @@ class HoldtrueTUI(App):
         yield Static(m.get("summary", ""), id="summary")
         decos = "\n".join(m.get("checks", {}).get("crosshair", {}).get("decorators", []))
         yield Static(f"{m.get('signature')}\n{decos}", id="contract")
-        yield DataTable(id="checks", cursor_type="none", zebra_stripes=False)
+        yield DataTable(id="checks", cursor_type="row", zebra_stripes=False)
+        yield Static("up/down to move, enter to drill in, q to quit", id="hint")
         yield Static("verifying...", id="verdict")
         yield Footer()
 
@@ -80,6 +118,7 @@ class HoldtrueTUI(App):
         for k in self._order:
             t.add_row(Text("·", style=_QUEUED), Text(_LABEL[k]),
                       Text("queued", style=_QUEUED), Text(""), key=k)
+        t.focus()
         self.set_interval(0.09, self._spin)
         self._run()
 
@@ -103,13 +142,20 @@ class HoldtrueTUI(App):
         self.call_from_thread(self._finish, cls)
 
     def _update(self, r: engine.CheckResult) -> None:
+        self._results[r.kind] = r
         t = self.query_one("#checks", DataTable)
         color = _COLOR.get(r.status, "#73897c")
+        detail = r.detail if len(r.detail) <= 50 else r.detail[:49] + "…"
         t.update_cell(r.kind, "icon", Text(_ICON.get(r.status, "·"), style=color))
         t.update_cell(r.kind, "status", Text(r.status, style=color))
-        t.update_cell(r.kind, "detail", Text(r.detail[:48], style="#7e9387"))
+        t.update_cell(r.kind, "detail", Text(detail, style="#9fb3a6"))
         if r.kind in self._order:
             self._running = self._order.index(r.kind) + 1
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        r = self._results.get(event.row_key.value)
+        if r is not None:
+            self.push_screen(CheckDetail(r))
 
     def _finish(self, cls: Classification) -> None:
         self._done = True

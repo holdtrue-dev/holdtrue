@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import (agents, changelog, crosscheck, engine, providers, report, revise,
                sandbox, verify)
-from .classify import FAILED
+from .classify import ENFORCED, FAILED, GUARANTEED
 
 
 def _approve_revision(args: argparse.Namespace) -> tuple[bool, str]:
@@ -182,16 +182,17 @@ def cmd_author(args: argparse.Namespace) -> int:
         print("  (self-check skipped)\n")
         return 0
     print("  self-check: does the author's own reference oracle satisfy the contract?")
-    results, _ = verify.run_verification(project, ref, manifest,
-                                         sandbox_on=False, mutation=False, on_result=_on_result)
-    ch, pr = results.get("crosshair"), results.get("negative_probe")
-    ok = bool(ch and ch.status == "confirmed" and pr and pr.status == "pass")
+    _, cls = verify.run_verification(project, ref, manifest,
+                                     sandbox_on=False, mutation=False, on_result=_on_result)
+    ok = cls.classification in (GUARANTEED, ENFORCED)
     print("-" * 72)
     if ok:
-        print("  contract is provable and non-vacuous. Review it, then run `holdtrue implement`.\n")
+        print(f"  contract self-checks ({cls.classification}). Review it, then run "
+              "`holdtrue implement`.\n")
         return 0
-    print("  WARNING: contract did not self-check (the reference oracle does not satisfy it,")
-    print("  or the contract is not CrossHair-provable). Review before implementing.\n")
+    print(f"  WARNING: contract did not self-check ({cls.classification}: the reference "
+          "oracle does not satisfy it, or the contract is too weak). Review before "
+          "implementing.\n")
     return 1
 
 

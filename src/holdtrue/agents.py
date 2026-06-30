@@ -33,6 +33,8 @@ input in its declared domain.
 
 Rules:
 - Edit only src/core.py.
+- If src/models.py exists, those are the shared contract types: import from it (it is
+  already imported at the top of the stub), and do not edit it.
 - No `type: ignore`, no `Any`, no casts.
 - Satisfy the literal contract. Do not guess at hidden intent.
 - Keep the function pure: no IO, no globals, no prints.
@@ -128,8 +130,17 @@ def stage_workspace(project: Path, manifest: dict, dest: Path) -> Path:
     shown = project / "contract" / manifest["checks"]["hypothesis_shown"]
     shutil.copy(shown, dest / "contract" / "tests_shown" / shown.name)
 
+    # A rich-type contract ships its shared pydantic models. The implementer imports
+    # them and must not edit them, so the signature's types resolve in src/core.py.
+    prelude = ""
+    models_rel = manifest.get("models")
+    if models_rel:
+        models_src = (project / "contract" / models_rel).read_text(encoding="utf-8")
+        (dest / "src" / "models.py").write_text(models_src, encoding="utf-8")
+        prelude = "from models import *  # shared contract types: do not edit\n\n\n"
+
     summary = manifest.get("summary", "").replace('"', "'")
-    stub = f'def {manifest["signature"]}:\n    """{summary}"""\n    raise NotImplementedError\n'
+    stub = prelude + f'def {manifest["signature"]}:\n    """{summary}"""\n    raise NotImplementedError\n'
     (dest / "src" / "core.py").write_text(stub, encoding="utf-8")
     return dest
 
@@ -186,7 +197,7 @@ def spawn_implementer(workspace: Path, manifest: dict, provider: Provider, *,
 
 
 def spawn_author(project: Path, template: Path, provider: Provider, *,
-                 timeout: float = 420.0,
+                 timeout: float = 600.0,
                  on_output: Callable[[str], None] | None = None) -> str:
     """Run a fresh, scoped context that writes the contract bundle from the intent.
     Separate context from the implementer."""

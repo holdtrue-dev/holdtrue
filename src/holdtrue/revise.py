@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import verify
+from .classify import ENFORCED, GUARANTEED
 from .providers import API, Provider, write_blocks, OUTPUT_RULES
 
 _DIAGNOSE_PROMPT = """The implementer could not satisfy this contract after several attempts, even though
@@ -106,17 +107,15 @@ def contract_diff(old: dict, new: dict) -> str:
 
 
 def self_check(project: Path, manifest: dict) -> tuple[bool, str]:
-    """Does the reference oracle satisfy the contract, provably and non-vacuously?"""
+    """Does the reference oracle satisfy the contract? A contract holds if the oracle
+    earns GUARANTEED (proven) or ENFORCED (runtime-enforced and clean over samples). It
+    fails only on a violation (FAILED) or a too-weak contract (UNGUARANTEED). This is
+    mode-agnostic: a runtime-enforced pydantic contract never gets a CrossHair proof, so
+    requiring one would wrongly reject every such contract."""
     ref = project / "contract_private" / "reference_impl.py"
-    sc, _ = verify.run_verification(project, ref, manifest, sandbox_on=False, mutation=False)
-    ch, pr = sc.get("crosshair"), sc.get("negative_probe")
-    ok = bool(ch and ch.status == "confirmed" and pr and pr.status == "pass")
-    why = []
-    if not (ch and ch.status == "confirmed"):
-        why.append(f"proof: {ch.detail if ch else 'missing'}")
-    if not (pr and pr.status == "pass"):
-        why.append(f"negative-probe: {pr.detail if pr else 'missing'}")
-    return ok, "; ".join(why) or "holds"
+    _, cls = verify.run_verification(project, ref, manifest, sandbox_on=False, mutation=False)
+    ok = cls.classification in (GUARANTEED, ENFORCED)
+    return ok, "holds" if ok else f"{cls.classification.lower()}: {cls.evidence}"
 
 
 def not_weaker(staged: Path, old_manifest: dict, new_manifest: dict) -> tuple[bool, str]:
@@ -158,7 +157,7 @@ def diagnose(project: Path, evidence: str, provider: Provider, *,
 
 
 def spawn_reviser(staged: Path, manifest: dict, evidence: str, provider: Provider, *,
-                  timeout: float = 420.0,
+                  timeout: float = 600.0,
                   on_output: Callable[[str], None] | None = None) -> str:
     """Run a fresh context that edits the staged contract to fix the self-check."""
     prompt = _REVISER_PROMPT.format(evidence=evidence)

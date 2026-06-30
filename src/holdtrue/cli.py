@@ -326,6 +326,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     _finish(project, "run (author + implementer)", manifest, results, cls, sb)
     if cls and cls.classification == FAILED:
         print("  reached max rounds without passing: UNRESOLVED.")
+        if not args.no_revise:
+            cex = (results.get("crosshair").counterexample if results and results.get("crosshair") else None)
+            evidence = (cls.evidence or "") + (f" counterexample: {cex}" if cex else "")
+            print(f"\n  diagnosing why it is stuck (provider: {prov.name}) ...")
+            diag = revise.diagnose(project, evidence, prov)
+            print(f"  diagnosis: {diag}")
+            changelog.record(project, trigger="failed-exhausted", evidence=evidence or "(none)",
+                             diff="", justification=diag, approved_by="diagnosis (not applied)",
+                             applied=False)
     return 0
 
 

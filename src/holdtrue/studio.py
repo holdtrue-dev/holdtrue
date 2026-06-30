@@ -18,6 +18,7 @@ import threading
 import time
 from pathlib import Path
 
+from rich.markup import escape
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Vertical, VerticalScroll
@@ -25,7 +26,8 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import (Button, DataTable, Footer, Input, Markdown,
                              OptionList, RichLog, Static, TextArea)
 
-from . import agents, engine, providers, report, sandbox, verify
+from . import (agents, changelog, engine, providers, report, revise, sandbox,
+               verify)
 from .classify import FAILED, GUARANTEED, UNGUARANTEED
 from .tui import CheckDetail, _BANNER, _COLOR, _ICON, _LABEL
 
@@ -239,7 +241,8 @@ class RunScreen(Screen):
     #verdict { margin: 0 2 1 2; padding: 1 2; text-align: left;
                border: heavy #18241d; color: #7e9387; height: auto; }
     """
-    BINDINGS = [("a", "approve", "approve"), ("r", "report", "report"), ("q", "quit_app", "quit")]
+    BINDINGS = [("a", "approve", "approve"), ("d", "decline", "decline"),
+                ("r", "report", "report"), ("q", "quit_app", "quit")]
 
     def compose(self) -> ComposeResult:
         app = self.app
@@ -261,7 +264,8 @@ class RunScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
-        self._approved = threading.Event()
+        self._gate = threading.Event()
+        self._gate_choice: str | None = None
         self._active: str | None = None
         self._t0 = 0.0
         self._spin_i = 0
@@ -396,10 +400,23 @@ class RunScreen(Screen):
         md = self._detail.get(key) or "_this stage has not produced anything yet._"
         self.app.push_screen(MarkdownScreen(f"stage · {label}", md))
 
-    def _offer_approve(self) -> None:
+    def _ask(self, label: str) -> None:
+        """Show the action button with a label and arm the approval gate."""
         b = self.query_one("#approve", Button)
+        b.label = label
         b.add_class("ready")
         b.focus()
+        self._gate_choice = None
+        self._gate.clear()
+
+    def _show_revision(self, diff: str, note: str) -> None:
+        self.query_one("#output", RichLog).styles.display = "none"
+        lines = ["[#f3c54e]proposed contract revision[/]", "",
+                 f"[#9fb3a6]{escape(diff) if diff else '(no change to the proven lines)'}[/]",
+                 "", f"[#7e9387]why:[/] {escape(note)}"]
+        c = self.query_one("#contract", Static)
+        c.update("\n".join(lines))
+        c.styles.display = "block"
 
     def _set_verdict(self, markup: str, color: str) -> None:
         self.query_one("#approve", Button).remove_class("ready")
@@ -411,11 +428,18 @@ class RunScreen(Screen):
         v.styles.animate("opacity", value=1.0, duration=0.5)
 
     # --- input ---
+    def _resolve_gate(self, choice: str) -> None:
+        b = self.query_one("#approve", Button)
+        if b.has_class("ready"):
+            self._gate_choice = choice
+            b.remove_class("ready")
+            self._gate.set()
+
     def action_approve(self) -> None:
-        if self.query_one("#approve", Button).has_class("ready"):
-            self._approved.set()
-            self.query_one("#approve", Button).remove_class("ready")
-            self._stage("approve", "done", "approved")
+        self._resolve_gate("approve")
+
+    def action_decline(self) -> None:
+        self._resolve_gate("decline")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.action_approve()
@@ -426,9 +450,16 @@ class RunScreen(Screen):
 
     def action_quit_app(self) -> None:
         self.app._quitting = True  # type: ignore[attr-defined]
-        self._approved.set()
+        self._gate.set()
         sandbox.abort_all()
         self.app.exit()
+
+    def _await_gate(self) -> str | None:
+        """Block the worker thread until the user approves/declines, or quits."""
+        while not self._gate.wait(0.2):
+            if getattr(self.app, "_quitting", False):
+                return None
+        return self._gate_choice
 
     def _safe(self, fn, *a) -> None:  # noqa: ANN001
         if getattr(self.app, "_quitting", False):
@@ -451,6 +482,59 @@ class RunScreen(Screen):
         lines.append(f"[{_DIM}]press [/][b]r[/][{_DIM}] to read the full evidence report.[/]")
         return "\n".join(lines)
 
+    def _selfcheck_loop(self, project: Path, manifest: dict, provider, stream):  # noqa: ANN001
+        """Self-check; on failure, propose a revision and (with approval) apply it,
+        bounded. Returns the manifest to proceed with, or None to stop (verdict set)."""
+        for attempt in range(3):
+            self._safe(self._stage, "selfcheck", "running", "checking against the oracle")
+            ok, why = revise.self_check(project, manifest)
+            if ok:
+                self._safe(self._stage, "selfcheck", "done", "holds for the oracle")
+                self._safe(self._set_detail, "selfcheck",
+                           "The reference oracle was run against the contract; it must hold, "
+                           "provably and non-vacuously, before any code is written.")
+                return manifest
+            self._safe(self._stage, "selfcheck", "failed", "contract does not hold")
+            if attempt >= 2:
+                self._safe(self._set_verdict, "[b #ff5f5f]✕  WRONG CONTRACT[/]\n"
+                           "[#7e9387]still failing after revisions.[/]", _BAD)
+                return None
+            self._safe(self._stream_begin, "selfcheck", "revising the contract")
+            staged = revise.stage_contract(project, Path(tempfile.mkdtemp(prefix="holdtrue_studio_revise_")))
+            revise.spawn_reviser(staged, manifest, why, provider, on_output=stream)
+            if not (staged / "contract" / "manifest.yaml").exists():
+                self._safe(self._set_verdict, "[b #ff5f5f]✕  NO REVISION[/]\n"
+                           "[#7e9387]the reviser produced no contract.[/]", _BAD)
+                return None
+            new_manifest = verify.load_manifest(staged, "contract/manifest.yaml")
+            ok2, reason = revise.not_weaker(staged, manifest, new_manifest)
+            diff, note = revise.contract_diff(manifest, new_manifest), revise.justification(staged)
+            self._safe(self._show_revision, diff, note)
+            self._safe(self._set_detail, "selfcheck",
+                       "## proposed revision\n\n```diff\n" + diff + "\n```\n\n" + note)
+            if not ok2:
+                changelog.record(project, trigger="self-check", evidence=why, diff=diff,
+                                 justification=note, approved_by="refused (ratchet)", applied=False)
+                self._safe(self._set_verdict, "[b #ff5f5f]✕  REVISION REFUSED[/]\n"
+                           f"[#7e9387]{escape(reason)}. never weaken a check to pass.[/]", _BAD)
+                return None
+            self._safe(self._stage, "selfcheck", "waiting", "approve the revision: a / decline: d")
+            self._safe(self._ask, "approve the contract revision  (a)   ·   decline (d)")
+            choice = self._await_gate()
+            if choice is None:
+                return None
+            applied = choice == "approve"
+            changelog.record(project, trigger="self-check", evidence=why, diff=diff,
+                             justification=note,
+                             approved_by="human" if applied else "human (declined)", applied=applied)
+            if not applied:
+                self._safe(self._set_verdict, "[b #f3c54e]REVISION DECLINED[/]\n"
+                           "[#7e9387]the contract was not changed.[/]", _WARN)
+                return None
+            revise.apply(staged, project)
+            manifest = verify.load_manifest(project, "contract/manifest.yaml")
+        return None
+
     # --- the loop, on a daemon thread ---
     def _pipeline(self) -> None:
         app = self.app
@@ -470,29 +554,23 @@ class RunScreen(Screen):
             manifest = verify.load_manifest(project, "contract/manifest.yaml")
             self._safe(self._stage, "author", "done", "contract written")
 
-            self._safe(self._stage, "selfcheck", "running", "checking against the oracle")
-            ref = project / "contract_private" / "reference_impl.py"
-            sc, _ = verify.run_verification(project, ref, manifest, sandbox_on=False, mutation=False)
-            ch, pr = sc.get("crosshair"), sc.get("negative_probe")
-            if not (ch and ch.status == "confirmed" and pr and pr.status == "pass"):
-                self._safe(self._stage, "selfcheck", "failed", "contract does not hold")
-                self._safe(self._set_verdict, "[b #ff5f5f]✕  WRONG CONTRACT[/]\n"
-                           "[#7e9387]the author's own reference oracle does not satisfy the "
-                           "contract, or it is not provable. nothing was sent to the implementer.[/]", _BAD)
-                return
-            self._safe(self._stage, "selfcheck", "done", "holds for the oracle")
-            self._safe(self._set_detail, "selfcheck",
-                       "The author's own reference oracle was run against the contract. Both "
-                       "the proof and the negative-probe must hold, or the contract is rejected "
-                       "before any code is written.\n\n" + self._checks_md(sc))
+            revised = self._selfcheck_loop(project, manifest, provider, stream)
+            if revised is None:
+                return  # verdict already set, or quit
+            manifest = revised
 
             decos = manifest.get("checks", {}).get("crosshair", {}).get("decorators", [])
             self._safe(self._show_contract, manifest.get("signature", ""), decos)
             self._safe(self._stage, "approve", "waiting", "your call (press a)")
-            self._safe(self._offer_approve)
-            while not self._approved.wait(0.2):
+            self._safe(self._ask, "approve the contract & implement  (a)")
+            if self._await_gate() != "approve":
                 if getattr(app, "_quitting", False):
                     return
+                self._safe(self._stage, "approve", "failed", "declined")
+                self._safe(self._set_verdict, "[b #f3c54e]CONTRACT DECLINED[/]\n"
+                           "[#7e9387]you did not approve the contract.[/]", _WARN)
+                return
+            self._safe(self._stage, "approve", "done", "approved")
 
             ws = Path(tempfile.mkdtemp(prefix="holdtrue_studio_impl_"))
             agents.stage_workspace(project, manifest, ws)
@@ -528,10 +606,19 @@ class RunScreen(Screen):
                 feedback = f"{cls.evidence}" + (f" counterexample: {cex}" if cex else "")
 
             if cls is not None and results is not None:
+                detail = self._checks_md(results)
+                if cls.classification == FAILED:
+                    self._safe(self._stream_begin, "verify", "diagnosing why it is stuck")
+                    cx = results.get("crosshair").counterexample if results.get("crosshair") else None
+                    evidence = (cls.evidence or "") + (f" counterexample: {cx}" if cx else "")
+                    diag = revise.diagnose(project, evidence, provider, on_output=stream)
+                    changelog.record(project, trigger="failed-exhausted", evidence=evidence or "(none)",
+                                     diff="", justification=diag,
+                                     approved_by="diagnosis (not applied)", applied=False)
+                    detail = "## why it is stuck\n\n" + diag + "\n\n---\n\n" + detail
                 self._safe(self._set_detail, "verify",
                            "The implementation, checked behind the curtain (sandboxed). Select a "
-                           "row in the checks table to drill into any single check.\n\n"
-                           + self._checks_md(results))
+                           "row to drill into a check.\n\n" + detail)
                 report_path = self._write_report(project, manifest, results, cls)
                 self._safe(self._set_verdict, self._verdict_markup(cls, report_path),
                            _VERDICT_COLOR.get(cls.classification, _DIM))

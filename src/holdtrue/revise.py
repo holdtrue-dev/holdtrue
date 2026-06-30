@@ -20,11 +20,25 @@ from __future__ import annotations
 
 import difflib
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Callable
 
 from . import verify
-from .providers import API, OUTPUT_RULES, Provider, write_blocks
+from .providers import API, Provider, write_blocks, OUTPUT_RULES
+
+_DIAGNOSE_PROMPT = """The implementer could not satisfy this contract after several attempts, even though
+the contract self-checks (the reference oracle satisfies it, so a correct implementation
+exists). Read intent/intent.md and contract/manifest.yaml.
+
+Counterexamples from the failed attempts:
+{evidence}
+
+In one short paragraph, explain the most likely reason the implementer is stuck, and
+what the human might change. Consider that the contract may be technically correct but
+ambiguous or misleading for someone who sees only the contract and not the intent, or
+that the intent itself may be wrong. Do not edit any files. Just explain.
+"""
 
 _REVISER_PROMPT = """You are revising a machine-checkable contract that FAILED its own self-check.
 You do NOT write the implementation.
@@ -124,6 +138,23 @@ def apply(staged: Path, project: Path) -> None:
         if dst.exists():
             shutil.rmtree(dst)
         shutil.copytree(staged / sub, dst)
+
+
+def diagnose(project: Path, evidence: str, provider: Provider, *,
+             timeout: float = 180.0,
+             on_output: Callable[[str], None] | None = None) -> str:
+    """Explain why the implementer is stuck, when it FAILED after every round. Runs in
+    a throwaway copy so a stray edit can't touch the project: this only reads and
+    explains, it does not revise."""
+    staged = stage_contract(project, Path(tempfile.mkdtemp(prefix="holdtrue_diag_")))
+    prompt = _DIAGNOSE_PROMPT.format(evidence=evidence or "(no counterexample captured)")
+    if provider.kind == API:
+        for sub in ("intent/intent.md", "contract/manifest.yaml"):
+            p = staged / sub
+            if p.exists():
+                prompt += f"\n\n--- {sub} ---\n{p.read_text(encoding='utf-8')}"
+        return provider.run(prompt, staged, timeout=timeout, on_output=on_output).strip()
+    return provider.run(prompt, staged, timeout=timeout, on_output=on_output).strip()
 
 
 def spawn_reviser(staged: Path, manifest: dict, evidence: str, provider: Provider, *,

@@ -11,8 +11,67 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import agents, engine, providers, report, sandbox, verify
+from . import agents, changelog, engine, providers, report, revise, sandbox, verify
 from .classify import FAILED
+
+
+def _approve_revision(args: argparse.Namespace) -> tuple[bool, str]:
+    """How a contract revision gets applied: human review by default, auto only when
+    explicitly opted in (and it has already passed the ratchet)."""
+    if args.auto_revise:
+        print("  auto-applying (passes the ratchet; --auto-revise).")
+        return True, "auto (--auto-revise, ratchet)"
+    if args.yes:
+        print("  --yes without --auto-revise: proposing only, not applying.")
+        return False, "not applied (--yes, no --auto-revise)"
+    try:
+        ans = input("  apply this revision? [y/N] ").strip().lower()
+    except EOFError:
+        ans = "n"
+    return (ans == "y"), ("human" if ans == "y" else "human (declined)")
+
+
+def _self_check_with_revision(project: Path, manifest: dict, prov, args: argparse.Namespace):
+    """Self-check the contract; on failure, propose a revision and (with approval)
+    apply it, bounded by --max-revisions. Returns the manifest to proceed with, or
+    None to stop. Every proposal is recorded in the changelog."""
+    for attempt in range(args.max_revisions + 1):
+        print("\n[2] self-check: does the contract hold for the author's reference oracle?")
+        ok, why = revise.self_check(project, manifest)
+        if ok:
+            return manifest
+        print(f"  self-check FAILED: {why}")
+        if args.no_revise or attempt >= args.max_revisions:
+            print("  not revising (disabled or out of attempts). Stopping.")
+            return None
+        print(f"\n  proposing a revision in a separate context (provider: {prov.name}) ...")
+        staged = revise.stage_contract(project, Path(tempfile.mkdtemp(prefix="holdtrue_revise_")))
+        revise.spawn_reviser(staged, manifest, why, prov)
+        if not (staged / "contract" / "manifest.yaml").exists():
+            print("  reviser produced no contract. Stopping.")
+            return None
+        new_manifest = verify.load_manifest(staged, "contract/manifest.yaml")
+        ok2, reason = revise.not_weaker(staged, manifest, new_manifest)
+        diff = revise.contract_diff(manifest, new_manifest)
+        note = revise.justification(staged)
+        print("\n  proposed revision:")
+        print("    " + (diff.replace("\n", "\n    ") if diff else "(no change to the proven lines)"))
+        print(f"\n  justification: {note}")
+        if not ok2:
+            print(f"\n  REFUSED: the revision is {reason}. Not applying (never weaken a check to pass).")
+            changelog.record(project, trigger="self-check", evidence=why, diff=diff,
+                             justification=note, approved_by="refused (ratchet)", applied=False)
+            return None
+        approved, who = _approve_revision(args)
+        changelog.record(project, trigger="self-check", evidence=why, diff=diff,
+                         justification=note, approved_by=who, applied=approved)
+        if not approved:
+            print("  revision not applied. Stopping.")
+            return None
+        revise.apply(staged, project)
+        manifest = verify.load_manifest(project, args.manifest)
+        print("  revision applied. re-checking ...")
+    return None
 
 
 def _provider(args: argparse.Namespace):
@@ -168,14 +227,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 1
     manifest = verify.load_manifest(project, args.manifest)
 
-    print("\n[2] self-check: does the contract hold for the author's reference oracle?")
-    ref = project / "contract_private" / "reference_impl.py"
-    sc, _ = verify.run_verification(project, ref, manifest, sandbox_on=False,
-                                    mutation=False, on_result=_on_result)
-    ch, pr = sc.get("crosshair"), sc.get("negative_probe")
-    if not (ch and ch.status == "confirmed" and pr and pr.status == "pass"):
-        print("  contract failed self-check (wrong-contract). Stopping.")
+    revised = _self_check_with_revision(project, manifest, prov, args)
+    if revised is None:
         return 1
+    manifest = revised
 
     print("\n  contract:")
     print(f"    {manifest.get('signature')}")
@@ -295,6 +350,12 @@ def main(argv: list[str] | None = None) -> int:
     ru.add_argument("--no-sandbox", action="store_true")
     ru.add_argument("--no-mutation", action="store_true")
     ru.add_argument("--provider", help="which LLM provider to use (default: claude)")
+    ru.add_argument("--max-revisions", type=int, default=2,
+                    help="how many times to let the contract be revised on a self-check failure")
+    ru.add_argument("--no-revise", action="store_true",
+                    help="do not propose contract revisions; stop on a self-check failure")
+    ru.add_argument("--auto-revise", action="store_true",
+                    help="apply a revision automatically when it passes the ratchet (else ask)")
     ru.set_defaults(func=cmd_run)
 
     st = sub.add_parser("studio",

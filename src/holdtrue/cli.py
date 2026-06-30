@@ -11,8 +11,17 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import agents, engine, report, sandbox, verify
+from . import agents, engine, providers, report, sandbox, verify
 from .classify import FAILED
+
+
+def _provider(args: argparse.Namespace):
+    """Resolve the chosen provider, or print why none is usable and return None."""
+    try:
+        return providers.resolve(getattr(args, "provider", None))
+    except providers.ProviderError as e:
+        print(f"  {e}")
+        return None
 
 
 def _on_result(r: engine.CheckResult) -> None:
@@ -54,16 +63,17 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 
 def cmd_implement(args: argparse.Namespace) -> int:
-    if not agents.available():
-        print("claude CLI not found; cannot spawn the implementer.")
+    prov = _provider(args)
+    if prov is None:
         return 1
     project = Path(args.project).resolve()
     manifest = verify.load_manifest(project, args.manifest)
     ws = Path(tempfile.mkdtemp(prefix="holdtrue_impl_"))
     agents.stage_workspace(project, manifest, ws)
     print(f"\nholdtrue implement  {manifest['intent_id']}")
-    print("  spawning implementer in a separate context (sees only the contract) ...")
-    impl_path, _ = agents.spawn_implementer(ws, manifest)
+    print(f"  spawning implementer in a separate context (provider: {prov.name}, "
+          "sees only the contract) ...")
+    impl_path, _ = agents.spawn_implementer(ws, manifest, prov)
     if not impl_path.exists() or "NotImplementedError" in impl_path.read_text():
         print("  implementer did not produce an implementation.")
         return 1
@@ -84,8 +94,8 @@ def cmd_implement(args: argparse.Namespace) -> int:
 
 
 def cmd_author(args: argparse.Namespace) -> int:
-    if not agents.available():
-        print("claude CLI not found; cannot spawn the author.")
+    prov = _provider(args)
+    if prov is None:
         return 1
     project = Path(args.project).resolve()
     if not (project / "intent" / "intent.md").exists():
@@ -93,8 +103,8 @@ def cmd_author(args: argparse.Namespace) -> int:
         return 1
     template = Path(args.template).resolve()
     print(f"\nholdtrue author  {project.name}")
-    print("  spawning contract author in a separate context (reads intent, writes contract) ...")
-    agents.spawn_author(project, template)
+    print(f"  spawning contract author in a separate context (provider: {prov.name}) ...")
+    agents.spawn_author(project, template, prov)
     if not (project / "contract" / "manifest.yaml").exists():
         print("  author did not produce contract/manifest.yaml.")
         return 1
@@ -141,8 +151,8 @@ def cmd_tui(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     """The full loop: author -> self-check -> approve -> implement -> verify,
     re-spawning the implementer with a counterexample on a FAILED round."""
-    if not agents.available():
-        print("claude CLI not found; cannot spawn the agents.")
+    prov = _provider(args)
+    if prov is None:
         return 1
     project = Path(args.project).resolve()
     if not (project / "intent" / "intent.md").exists():
@@ -151,8 +161,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     sb = not args.no_sandbox
 
     if not args.skip_author:
-        print("\n[1] author: writing the contract in a separate context ...")
-        agents.spawn_author(project, Path(args.template).resolve())
+        print(f"\n[1] author: writing the contract in a separate context (provider: {prov.name}) ...")
+        agents.spawn_author(project, Path(args.template).resolve(), prov)
     if not (project / "contract" / "manifest.yaml").exists():
         print("  no contract present.")
         return 1
@@ -186,8 +196,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     agents.stage_workspace(project, manifest, ws)
     feedback, results, cls = None, None, None
     for rnd in range(1, args.max_rounds + 1):
-        print(f"\n[4] implement (round {rnd}/{args.max_rounds}) in a separate context ...")
-        impl_path, _ = agents.spawn_implementer(ws, manifest, feedback=feedback)
+        print(f"\n[4] implement (round {rnd}/{args.max_rounds}) in a separate context "
+              f"(provider: {prov.name}) ...")
+        impl_path, _ = agents.spawn_implementer(ws, manifest, prov, feedback=feedback)
         if not impl_path.exists() or "NotImplementedError" in impl_path.read_text():
             print("  implementer produced nothing.")
             return 1
@@ -204,6 +215,29 @@ def cmd_run(args: argparse.Namespace) -> int:
     _finish(project, "run (author + implementer)", manifest, results, cls, sb)
     if cls and cls.classification == FAILED:
         print("  reached max rounds without passing: UNRESOLVED.")
+    return 0
+
+
+def cmd_providers(args: argparse.Namespace) -> int:
+    avail = {p.name for p in providers.discover()}
+    print("\nholdtrue providers")
+    print("-" * 72)
+    for p in providers.all_providers():
+        mark = "available" if p.name in avail else "not found"
+        print(f"  [{'x' if p.name in avail else ' '}] {p.name:14} {p.kind:6} {p.detail}  ({mark})")
+    print()
+    return 0
+
+
+def cmd_studio(args: argparse.Namespace) -> int:
+    try:
+        from . import studio
+    except ModuleNotFoundError:
+        print("textual is not installed (needed for studio): uv add textual")
+        return 1
+    project = Path(args.project).resolve() if args.project else None
+    studio.run_studio(project, Path(args.template).resolve(),
+                      sandbox_on=not args.no_sandbox, mutation=not args.no_mutation)
     return 0
 
 
@@ -227,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
     im.add_argument("--no-verify", action="store_true", help="implement only, skip verify")
     im.add_argument("--no-sandbox", action="store_true")
     im.add_argument("--no-mutation", action="store_true")
+    im.add_argument("--provider", help="which LLM provider to use (default: claude)")
     im.set_defaults(func=cmd_implement)
 
     au = sub.add_parser("author",
@@ -236,6 +271,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="a contract bundle to use as a format example")
     au.add_argument("--no-check", action="store_true",
                     help="skip the reference-oracle self-check")
+    au.add_argument("--provider", help="which LLM provider to use (default: claude)")
     au.set_defaults(func=cmd_author)
 
     tu = sub.add_parser("tui", help="live dashboard: run a verification and watch it stream")
@@ -258,7 +294,21 @@ def main(argv: list[str] | None = None) -> int:
     ru.add_argument("--max-rounds", type=int, default=3)
     ru.add_argument("--no-sandbox", action="store_true")
     ru.add_argument("--no-mutation", action="store_true")
+    ru.add_argument("--provider", help="which LLM provider to use (default: claude)")
     ru.set_defaults(func=cmd_run)
+
+    st = sub.add_parser("studio",
+                        help="interactive TUI: pick a provider, type an intent, run the loop")
+    st.add_argument("project", nargs="?", default=None,
+                    help="project dir to create or reuse (default: a new temp project)")
+    st.add_argument("--template", default="examples/clamp",
+                    help="a contract bundle the author uses as a format example")
+    st.add_argument("--no-sandbox", action="store_true")
+    st.add_argument("--no-mutation", action="store_true")
+    st.set_defaults(func=cmd_studio)
+
+    pr = sub.add_parser("providers", help="list discovered LLM providers")
+    pr.set_defaults(func=cmd_providers)
 
     args = p.parse_args(argv)
     try:

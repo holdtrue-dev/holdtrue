@@ -53,6 +53,23 @@ def abort_all() -> None:
                 pass
 
 
+def track(p: "subprocess.Popen") -> None:
+    """Register an externally-created process group so abort_all() can kill it.
+    Used for the LLM agent subprocess, which runs unsandboxed but should still die
+    when the TUI quits."""
+    with _lock:
+        _active.add(p)
+
+
+def untrack(p: "subprocess.Popen") -> None:
+    with _lock:
+        _active.discard(p)
+
+
+def aborted() -> bool:
+    return _aborted.is_set()
+
+
 def _spawn(args: list[str], cwd: str | None) -> subprocess.Popen:
     p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                          text=True, cwd=cwd, start_new_session=True)

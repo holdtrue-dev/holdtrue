@@ -33,6 +33,19 @@ implementer fills it in and it gets verified. A FAILED round re-spawns the
 implementer with the counterexample, bounded by `--max-rounds`. Shown on a fresh
 `square` intent: GUARANTEED in one round.
 
+## Pluggable providers (done)
+
+The two contexts run through a Provider, so `claude` is no longer hardwired.
+`holdtrue providers` lists what is usable; `--provider <name>` picks one. Two
+shapes are supported: a coding-agent CLI that edits the workspace (claude, plus
+best-effort adapters for aider, gemini, codex, or any command via
+`HOLDTRUE_AGENT_CMD`), and a chat API that returns the files for holdtrue to write
+(Anthropic, OpenAI, Ollama). The curtain is the staged filesystem, so the
+isolation holds whoever is asked.
+
+`holdtrue studio` runs the loop in a TUI: discover providers, pick one, type the
+intent, approve the contract, watch it verify to a verdict.
+
 ## Next: never-silent revision
 
 When verification shows the contract or the intent was wrong, propose the change

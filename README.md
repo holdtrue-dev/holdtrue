@@ -30,3 +30,11 @@ Watch it run live in a TUI:
 ```
 uv run python -m holdtrue.cli tui examples/clamp --impl examples/clamp/controls/correct.py
 ```
+
+Or drive the whole loop from a TUI: pick a provider, type an intent, approve the contract, watch it verify.
+
+```
+uv run python -m holdtrue.cli studio
+```
+
+The LLM is pluggable. `holdtrue providers` lists what is usable, and `--provider <name>` (or studio's picker) chooses one: a coding-agent CLI like `claude` (default), or a chat API like Anthropic, OpenAI, or Ollama.

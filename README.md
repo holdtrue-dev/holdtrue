@@ -22,7 +22,7 @@ One intent, end to end:
 6. **verify** (holdtrue, sandboxed): types, proof, properties, negative-probe, mutation.
 7. **the verdict** (you): guaranteed, enforced, unguaranteed, or failed, with evidence.
 
-![holdtrue architecture](assets/architecture.png)
+![holdtrue architecture](assets/architecture.gif)
 
 The two AI contexts run on an assistant you choose: a coding-agent CLI (`claude`, `aider`, `gemini`, `codex`), a chat API (Anthropic, OpenAI, Ollama), or your own command via `HOLDTRUE_AGENT_CMD`. `holdtrue providers` lists what is usable; `--provider` picks one. Any assistant, any model: the proof is the same.
 

@@ -356,8 +356,13 @@ def cmd_studio(args: argparse.Namespace) -> int:
         print("textual is not installed (needed for studio): uv add textual")
         return 1
     project = Path(args.project).resolve() if args.project else None
+    intent = args.intent
+    if intent and intent.startswith("@"):
+        intent = Path(intent[1:]).expanduser().read_text(encoding="utf-8")
     studio.run_studio(project, Path(args.template).resolve(),
-                      sandbox_on=not args.no_sandbox, mutation=not args.no_mutation)
+                      sandbox_on=not args.no_sandbox, mutation=not args.no_mutation,
+                      provider_name=args.provider, model=args.model,
+                      name=args.name, intent=intent)
     return 0
 
 
@@ -446,6 +451,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="a contract bundle the author uses as a format example")
     st.add_argument("--no-sandbox", action="store_true")
     st.add_argument("--no-mutation", action="store_true")
+    st.add_argument("--provider", help="provider to use (skips the picker)")
+    st.add_argument("--model", help="model for an API provider (skips the model screen)")
+    st.add_argument("--name", help="project name, when no project dir is given")
+    st.add_argument("--intent", help="the intent text, or @path to read it from a file "
+                                     "(skips the intent screen)")
     st.set_defaults(func=cmd_studio)
 
     pr = sub.add_parser("providers", help="list discovered LLM providers")

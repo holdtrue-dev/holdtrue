@@ -673,7 +673,9 @@ class StudioApp(App):
     CSS = "Screen { background: #07090a; color: #cdddd2; }"
 
     def __init__(self, project: Path | None, template: Path, *,
-                 sandbox_on: bool, mutation: bool, autorun: bool = True) -> None:
+                 sandbox_on: bool, mutation: bool, autorun: bool = True,
+                 provider_name: str | None = None, model: str | None = None,
+                 name: str | None = None, intent: str | None = None) -> None:
         super().__init__()
         self._project = project
         self._template = template
@@ -682,10 +684,31 @@ class StudioApp(App):
         self._autorun = autorun
         self._providers = providers.discover()
         self._provider = self._providers[0] if self._providers else None
+        self._provider_name = provider_name
+        self._model = model
+        self._name = name
+        self._intent = intent
         self._quitting = False
 
     def on_mount(self) -> None:
+        # The picker is always the base screen, so 'back' has somewhere to go. Anything
+        # supplied on the command line skips ahead on top of it.
         self.push_screen(ProviderScreen())
+        if not self._provider_name:
+            return
+        try:
+            prov = providers.resolve(self._provider_name)
+        except providers.ProviderError:
+            return  # named provider not usable: stay on the picker
+        self._provider = prov
+        if self._model:
+            prov.set_model(self._model)
+        if prov.kind == providers.API and not self._model:
+            self.push_screen(ModelScreen())
+        elif self._intent:
+            self.start_run(self._name or "", self._intent)
+        else:
+            self.push_screen(IntentScreen())
 
     def start_run(self, name: str, intent: str) -> None:
         project = self._project
@@ -701,5 +724,8 @@ class StudioApp(App):
 
 
 def run_studio(project: Path | None, template: Path, *,
-               sandbox_on: bool = True, mutation: bool = True) -> None:
-    StudioApp(project, template, sandbox_on=sandbox_on, mutation=mutation).run()
+               sandbox_on: bool = True, mutation: bool = True,
+               provider_name: str | None = None, model: str | None = None,
+               name: str | None = None, intent: str | None = None) -> None:
+    StudioApp(project, template, sandbox_on=sandbox_on, mutation=mutation,
+              provider_name=provider_name, model=model, name=name, intent=intent).run()

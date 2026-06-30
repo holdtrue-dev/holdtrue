@@ -71,9 +71,18 @@ manifest.yaml must contain:
       - "<a wrong one-line body>"
   acceptance: { target_class: GUARANTEED }
 
+Two kinds of contract, pick by the intent:
+- PROVABLE (preferred for pure integer arithmetic with no loops): keep to int so
+  CrossHair can exhaust it, and aim for GUARANTEED. This is the default.
+- ENFORCED (for rich types: strings, dates, money, structured data): follow the
+  worked example's pydantic pattern. Define the types in contract/models.py, add
+  `models: "models.py"` and `enforcement: runtime` to the manifest, and use those
+  types in the signature. CrossHair is skipped; the contract is checked at runtime.
+  Aim for ENFORCED. If the worked example has a contract/models.py, read it and
+  mirror its style.
+
 Hard rules:
-- Use only int and other types CrossHair can reason over. No float, no IO, no
-  unbounded loops.
+- No IO, no globals, no prints, no unbounded loops in the contract conditions.
 - The postcondition MUST pin the EXACT result (result == <formula>), not just a
   range. A range-only contract is too weak and will be rejected.
 - contract/tests_shown/test_<name>.py: `from core import <func>`, one hypothesis

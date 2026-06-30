@@ -30,7 +30,3 @@ Watch it run live in a TUI:
 ```
 uv run python -m holdtrue.cli tui examples/clamp --impl examples/clamp/controls/correct.py
 ```
-
-## Stack
-
-deal + CrossHair (proof), Hypothesis (properties), cosmic-ray (mutation), mypy, bubblewrap. Python 3.12, managed with uv.

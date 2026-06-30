@@ -41,6 +41,9 @@ _QUEUED = "#3a4a40"
 _RUN = "#f3c54e"
 _INK = "#cdddd2"
 _ENF = "#2bd6c0"
+_TOOL_COLOR = {"Bash": "#f3c54e", "Write": "#33ff66", "Edit": "#33ff66",
+               "Read": "#2bd6c0", "Grep": "#2bd6c0", "Glob": "#2bd6c0",
+               "TodoWrite": "#7e9387", "WebFetch": "#9fd0ff", "WebSearch": "#9fd0ff"}
 _VERDICT_COLOR = {GUARANTEED: _OK, ENFORCED: _ENF, UNGUARANTEED: _WARN, FAILED: _BAD}
 _VERDICT_GLYPH = {GUARANTEED: "✓", ENFORCED: "⊨", UNGUARANTEED: "~", FAILED: "✗"}
 _VERDICT_MEANING = {
@@ -337,9 +340,31 @@ class RunScreen(Screen):
         out.write(f"── {title} ──")
 
     def _stream_write(self, text: str) -> None:
-        if self._stream_target:
-            self._detail[self._stream_target] += text
-        self.query_one("#output", RichLog).write(text.rstrip("\n"))
+        out = self.query_one("#output", RichLog)
+        for line in text.split("\n"):
+            out.write(self._style_line(line))
+            if self._stream_target is not None:
+                self._detail[self._stream_target] += self._md_line(line) + "\n"
+
+    def _style_line(self, line: str) -> Text:
+        """A model output line. Tool calls (Read/Write/Edit/Bash ...) get their tool
+        name highlighted so the actions stand out from the narration."""
+        if line.startswith("→ "):  # "-> Name target", from the stream-json parser
+            name, _, tail = line[2:].partition(" ")
+            t = Text("→ ", style=_DIM)
+            t.append(name, style=f"bold {_TOOL_COLOR.get(name, _ENF)}")
+            if tail:
+                t.append("  ·  ", style=_DIM)
+                t.append(tail if len(tail) <= 160 else tail[:159] + "…", style="#9fb3a6")
+            return t
+        return Text(line, style="#cfe0d4")
+
+    @staticmethod
+    def _md_line(line: str) -> str:
+        if line.startswith("→ "):
+            name, _, tail = line[2:].partition(" ")
+            return f"- **{name}**" + (f" `{tail}`" if tail else "")
+        return line
 
     def _show_contract(self, signature: str, decorators: list[str]) -> None:
         self.query_one("#output", RichLog).styles.display = "none"

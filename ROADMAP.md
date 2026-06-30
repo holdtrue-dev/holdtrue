@@ -12,15 +12,12 @@ Where holdtrue is and what comes next. Short and honest.
 - [x] `holdtrue run`: the full loop in one command, re-spawning on a `FAILED` round
 - [x] Pluggable providers: coding-agent CLIs (claude, ...) or chat APIs (Anthropic, OpenAI, Ollama), chosen with `--provider`
 - [x] `holdtrue studio`: pick a provider and model, type an intent, watch it run live to a verdict
+- [x] Never-silent revision: a self-check failure proposes a contract fix; a ratchet forbids weakening; human-approved; recorded in a changelog
+- [x] Second-author cross-check: a second author catches an axis the approved contract does not enforce, proposed as a non-weakening addition
+- [x] On an unresolved run, a diagnosis of why it is stuck (the contract may be ambiguous, or the intent wrong)
+- [x] The revision flow is surfaced live in `holdtrue run`, `cross-check`, and studio
 
-## Next: never-silent revision
-
-- [ ] When verification shows the contract or the intent was wrong, propose the change back to the human with its justification
-- [ ] Record every revision in a changelog
-- [ ] Never weaken a check to pass
-- [ ] Optional second author to diff two contracts and catch a missing axis
-
-## Later: widen the domain
+## Next: widen the domain
 
 - [ ] Typed API layer with pydantic: runtime-enforced, reported as enforced, not proven
 - [ ] More provable shapes: more types, simple stateful tests

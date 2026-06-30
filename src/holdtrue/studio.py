@@ -13,6 +13,7 @@ never blur together.
 """
 from __future__ import annotations
 
+import re
 import tempfile
 import threading
 import time
@@ -21,7 +22,8 @@ from pathlib import Path
 from rich.markup import escape
 from rich.text import Text
 from textual.app import App, ComposeResult
-from textual.containers import Vertical, VerticalScroll
+from textual.binding import Binding
+from textual.containers import Center, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.widgets import (Button, DataTable, Footer, Input, Markdown,
                              OptionList, RichLog, Static, TextArea)
@@ -31,7 +33,16 @@ from . import (agents, changelog, engine, providers, report, revise, sandbox,
 from .classify import ENFORCED, FAILED, GUARANTEED, UNGUARANTEED
 from .tui import CheckDetail, _BANNER, _COLOR, _ICON, _LABEL
 
-_HOURGLASS = ("⏳", "⌛")
+_HOURGLASS = ("⧗", "⧖")  # single-width hourglass, so it aligns with the round markers
+
+# Narration from the model is plain text, not markdown. Escaping the inline-markup
+# characters keeps the drill-down faithful to the streamed view (subtotal_cents stays
+# subtotal_cents, qty * price keeps its asterisk, a leading ## is not a heading).
+_MD_SPECIAL = re.compile(r"([\\`*_#\[\]<>])")
+
+
+def _md_escape(s: str) -> str:
+    return _MD_SPECIAL.sub(r"\\\1", s)
 
 _OK = "#33ff66"
 _WARN = "#f3c54e"
@@ -232,22 +243,34 @@ class RunScreen(Screen):
     RunScreen { layout: vertical; }
     #logo { color: #33ff66; text-style: bold; padding: 1 2 0 2; }
     #rhead { padding: 0 2 0 2; color: #2bbf57; }
-    #body { height: 1fr; }
+    #body { height: 1fr; scrollbar-size: 0 0; }
     #stages { margin: 1 2 0 2; height: auto; background: #07090a; scrollbar-size: 0 0; }
     #output { margin: 1 2 0 2; height: 16; border: round #18241d; background: #0a0f0a;
-              color: #9fb3a6; display: none; }
+              color: #9fb3a6; display: none; scrollbar-size: 0 0; }
     #contract { margin: 1 2 0 2; border: round #2bbf57; background: #0c120c; padding: 1 2;
                 height: auto; display: none; }
     #checks-label { margin: 1 2 0 2; color: #506054; display: none; }
-    #checks { margin: 0 2 1 2; height: auto; background: #07090a; display: none; }
+    #checks { margin: 0 2 1 2; height: auto; background: #07090a; display: none; scrollbar-size: 0 0; }
     #checks > .datatable--cursor { background: #14201a; }
-    #approve { margin: 0 2 1 2; display: none; }
+    #approve-row { height: auto; margin: 2 2 0 2; align-horizontal: center; }
+    #approve { display: none; min-width: 52; height: 3; text-style: bold;
+               background: #146b34; color: #eafff0; border: round #33ff66; }
     #approve.ready { display: block; }
+    #approve:hover { background: #2bbf57; color: #07090a; }
+    #approve:focus { border: round #7dffa6; }
+    #approve-hint { display: none; text-align: center; color: #7e9387; margin: 0 2 1 2; }
+    #approve-hint.ready { display: block; }
     #verdict { margin: 0 2 1 2; padding: 1 2; text-align: left;
-               border: heavy #18241d; color: #7e9387; height: auto; }
+               border: heavy #18241d; color: #7e9387; height: auto; display: none; }
     """
-    BINDINGS = [("a", "approve", "approve"), ("d", "decline", "decline"),
-                ("r", "report", "report"), ("q", "quit_app", "quit")]
+    # priority, so the screen claims these keys before whatever holds focus (the
+    # checks table, the approve button) can swallow them. There is no text input on
+    # this screen, so a single-letter shortcut is never ambiguous.
+    BINDINGS = [Binding("a", "approve", "approve", priority=True),
+                Binding("d", "decline", "decline", priority=True),
+                Binding("r", "report", "report", priority=True),
+                Binding("o", "artifacts", "artifacts", priority=True),
+                Binding("q", "quit_app", "quit", priority=True)]
 
     def compose(self) -> ComposeResult:
         app = self.app
@@ -264,8 +287,10 @@ class RunScreen(Screen):
             yield Static("", id="contract")
             yield Static("verify · checks  (↑↓ to move, enter to drill in)", id="checks-label")
             yield DataTable(id="checks", show_header=False, cursor_type="row")
-        yield Button("approve the contract & implement  (a)", variant="success", id="approve")
-        yield Static("running the loop ...", id="verdict")
+        with Center(id="approve-row"):
+            yield Button("accept contract & start implementation?", id="approve")
+        yield Static("(a)pprove   or   (d)ecline", id="approve-hint")
+        yield Static("", id="verdict")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -280,6 +305,8 @@ class RunScreen(Screen):
         self._report_md: str | None = None
         self._detail: dict[str, str] = {}      # per-stage markdown, for drill-down
         self._stream_target: str | None = None
+        self._artifacts: list[tuple[str, Path, str]] = []  # (label, path, kind)
+        self._impl_path: Path | None = None
         t = self.query_one("#stages", DataTable)
         t.add_column(" ", width=3, key="icon")
         t.add_column("stage", width=12, key="name")
@@ -328,7 +355,7 @@ class RunScreen(Screen):
         t.update_cell(key, "name", Text(label, style=name_style))
         t.update_cell(key, "note", Text(note, style=note_style))
 
-    def _stream_begin(self, stage: str, title: str) -> None:
+    def _stream_begin(self, stage: str) -> None:
         self._stream_target = stage
         self._detail[stage] = ""
         self.query_one("#contract", Static).styles.display = "none"
@@ -337,22 +364,24 @@ class RunScreen(Screen):
         out = self.query_one("#output", RichLog)
         out.clear()
         out.styles.display = "block"
-        out.write(f"── {title} ──")
 
     def _stream_write(self, text: str) -> None:
         out = self.query_one("#output", RichLog)
         for line in text.split("\n"):
+            if not line.strip():
+                continue
             out.write(self._style_line(line))
+            out.write(Text(""))  # a blank line between entries, for readability
             if self._stream_target is not None:
-                self._detail[self._stream_target] += self._md_line(line) + "\n"
+                # Blank line between blocks, or markdown merges them into one paragraph.
+                self._detail[self._stream_target] += self._md_line(line) + "\n\n"
 
     def _style_line(self, line: str) -> Text:
         """A model output line. Tool calls (Read/Write/Edit/Bash ...) get their tool
         name highlighted so the actions stand out from the narration."""
         if line.startswith("→ "):  # "-> Name target", from the stream-json parser
             name, _, tail = line[2:].partition(" ")
-            t = Text("→ ", style=_DIM)
-            t.append(name, style=f"bold {_TOOL_COLOR.get(name, _ENF)}")
+            t = Text(name, style=f"bold {_TOOL_COLOR.get(name, _ENF)}")
             if tail:
                 t.append("  ·  ", style=_DIM)
                 t.append(tail if len(tail) <= 160 else tail[:159] + "…", style="#9fb3a6")
@@ -361,10 +390,18 @@ class RunScreen(Screen):
 
     @staticmethod
     def _md_line(line: str) -> str:
-        if line.startswith("→ "):
+        """One streamed line as a self-contained markdown block. Tool calls become a
+        labelled entry; a Bash command is fenced so it is syntax-highlighted and does
+        not wrap as one long inline span. Narration is escaped so it renders literally,
+        matching the plain streamed view rather than being re-parsed as markdown."""
+        if line.startswith("→ "):  # "-> Name target", from the stream-json parser
             name, _, tail = line[2:].partition(" ")
-            return f"- **{name}**" + (f" `{tail}`" if tail else "")
-        return line
+            if not tail:
+                return f"**{name}**"
+            if name == "Bash":
+                return f"**{name}**\n\n```bash\n{tail}\n```"
+            return f"**{name}** `{tail}`"
+        return _md_escape(line)
 
     def _show_contract(self, signature: str, decorators: list[str]) -> None:
         self.query_one("#output", RichLog).styles.display = "none"
@@ -432,6 +469,7 @@ class RunScreen(Screen):
         b = self.query_one("#approve", Button)
         b.label = label
         b.add_class("ready")
+        self.query_one("#approve-hint", Static).add_class("ready")
         b.focus()
         self._gate_choice = None
         self._gate.clear()
@@ -447,7 +485,9 @@ class RunScreen(Screen):
 
     def _set_verdict(self, markup: str, color: str) -> None:
         self.query_one("#approve", Button).remove_class("ready")
+        self.query_one("#approve-hint", Static).remove_class("ready")
         v = self.query_one("#verdict", Static)
+        v.styles.display = "block"
         v.update(markup)
         v.styles.color = color
         v.styles.border = ("heavy", color)
@@ -460,6 +500,7 @@ class RunScreen(Screen):
         if b.has_class("ready"):
             self._gate_choice = choice
             b.remove_class("ready")
+            self.query_one("#approve-hint", Static).remove_class("ready")
             self._gate.set()
 
     def action_approve(self) -> None:
@@ -474,6 +515,31 @@ class RunScreen(Screen):
     def action_report(self) -> None:
         if self._report_md:
             self.app.push_screen(MarkdownScreen("evidence report", self._report_md))
+
+    def action_artifacts(self) -> None:
+        if self._artifacts:
+            self.app.push_screen(ArtifactsScreen(self._artifacts))
+
+    def _refresh_artifacts(self, project: Path) -> None:
+        """Gather what the run produced, so it can be browsed once it finishes."""
+        arts: list[tuple[str, Path, str]] = []
+
+        def add(label: str, p: Path, kind: str) -> None:
+            if p.exists():
+                arts.append((label, p, kind))
+
+        add("intent", project / "intent" / "intent.md", "md")
+        add("contract · manifest.yaml", project / "contract" / "manifest.yaml", "yaml")
+        add("contract · models.py", project / "contract" / "models.py", "python")
+        shown = project / "contract" / "tests_shown"
+        for t in sorted(shown.glob("*.py")) if shown.is_dir() else []:
+            add(f"contract · {t.name}", t, "python")
+        add("reference oracle", project / "contract_private" / "reference_impl.py", "python")
+        if self._impl_path is not None:
+            add("implementation · core.py", self._impl_path, "python")
+        add("evidence report", project / "reports" / "evidence_report.md", "md")
+        add("revisions", project / "revisions" / "CHANGELOG.md", "md")
+        self._artifacts = arts
 
     def action_quit_app(self) -> None:
         self.app._quitting = True  # type: ignore[attr-defined]
@@ -506,7 +572,8 @@ class RunScreen(Screen):
         for reason in cls.reasons[:4]:
             lines.append(f"[{_DIM}]  - {reason}[/]")
         lines.append(f"[{_DIM}]human code review still required:[/] {human}")
-        lines.append(f"[{_DIM}]press [/][b]r[/][{_DIM}] to read the full evidence report.[/]")
+        lines.append(f"[{_DIM}]press [/][b]r[/][{_DIM}] for the report, [/][b]o[/]"
+                     f"[{_DIM}] to browse the artifacts.[/]")
         return "\n".join(lines)
 
     def _selfcheck_loop(self, project: Path, manifest: dict, provider, stream):  # noqa: ANN001
@@ -526,7 +593,7 @@ class RunScreen(Screen):
                 self._safe(self._set_verdict, "[b #ff5f5f]✕  WRONG CONTRACT[/]\n"
                            "[#7e9387]still failing after revisions.[/]", _BAD)
                 return None
-            self._safe(self._stream_begin, "selfcheck", "revising the contract")
+            self._safe(self._stream_begin, "selfcheck")
             staged = revise.stage_contract(project, Path(tempfile.mkdtemp(prefix="holdtrue_studio_revise_")))
             revise.spawn_reviser(staged, manifest, why, provider, on_output=stream)
             if not (staged / "contract" / "manifest.yaml").exists():
@@ -546,7 +613,7 @@ class RunScreen(Screen):
                            f"[#7e9387]{escape(reason)}. never weaken a check to pass.[/]", _BAD)
                 return None
             self._safe(self._stage, "selfcheck", "waiting", "approve the revision: a / decline: d")
-            self._safe(self._ask, "approve the contract revision  (a)   ·   decline (d)")
+            self._safe(self._ask, "accept the revised contract?")
             choice = self._await_gate()
             if choice is None:
                 return None
@@ -571,7 +638,7 @@ class RunScreen(Screen):
         stream = lambda s: self._safe(self._stream_write, s)  # noqa: E731
         try:
             self._safe(self._stage, "author", "running", "writing the contract")
-            self._safe(self._stream_begin, "author", "author")
+            self._safe(self._stream_begin, "author")
             agents.spawn_author(project, template, provider, on_output=stream)
             if not (project / "contract" / "manifest.yaml").exists():
                 self._safe(self._stage, "author", "failed", "produced no contract")
@@ -589,7 +656,7 @@ class RunScreen(Screen):
             decos = manifest.get("checks", {}).get("crosshair", {}).get("decorators", [])
             self._safe(self._show_contract, manifest.get("signature", ""), decos)
             self._safe(self._stage, "approve", "waiting", "your call (press a)")
-            self._safe(self._ask, "approve the contract & implement  (a)")
+            self._safe(self._ask, "accept contract & start implementation?")
             if self._await_gate() != "approve":
                 if getattr(app, "_quitting", False):
                     return
@@ -610,9 +677,10 @@ class RunScreen(Screen):
                     return
                 note = "writing the code, blind" + (f" (round {rnd})" if rnd > 1 else "")
                 self._safe(self._stage, "implement", "running", note)
-                self._safe(self._stream_begin, "implement", f"implement (round {rnd})")
+                self._safe(self._stream_begin, "implement")
                 impl_path, _ = agents.spawn_implementer(ws, manifest, provider,
                                                         feedback=feedback, on_output=stream)
+                self._impl_path = impl_path
                 if not impl_path.exists() or "NotImplementedError" in impl_path.read_text():
                     self._safe(self._stage, "implement", "failed", "produced nothing")
                     self._safe(self._set_verdict, "[b #ff5f5f]✕  NO IMPLEMENTATION[/]\n"
@@ -635,7 +703,7 @@ class RunScreen(Screen):
             if cls is not None and results is not None:
                 detail = self._checks_md(results)
                 if cls.classification == FAILED:
-                    self._safe(self._stream_begin, "verify", "diagnosing why it is stuck")
+                    self._safe(self._stream_begin, "verify")
                     cx = results.get("crosshair").counterexample if results.get("crosshair") else None
                     evidence = (cls.evidence or "") + (f" counterexample: {cx}" if cx else "")
                     diag = revise.diagnose(project, evidence, provider, on_output=stream)
@@ -653,6 +721,8 @@ class RunScreen(Screen):
             self._safe(self._set_verdict, f"[b #ff5f5f]✕  PROVIDER ERROR[/]\n[#7e9387]{e}[/]", _BAD)
         except Exception as e:  # noqa: BLE001 - surface any failure on the verdict line
             self._safe(self._set_verdict, f"[b #ff5f5f]✕  ERROR[/]\n[#7e9387]{e}[/]", _BAD)
+        finally:
+            self._refresh_artifacts(project)
 
     def _write_report(self, project, manifest, results, cls) -> Path:  # noqa: ANN001
         sb = self.app._sandbox_on and engine.sandbox.bwrap_available()  # type: ignore[attr-defined]
@@ -689,6 +759,46 @@ class MarkdownScreen(ModalScreen):
         with VerticalScroll(id="rbox"):
             yield Markdown(self._md)
         yield Static("esc to go back", id="rfoot")
+
+    def action_dismiss(self) -> None:  # type: ignore[override]
+        self.app.pop_screen()
+
+
+class ArtifactsScreen(ModalScreen):
+    """Browse the files a run produced. Enter opens one: markdown is rendered, code is
+    shown with syntax highlighting (reusing MarkdownScreen with a fenced block)."""
+
+    BINDINGS = [("escape", "dismiss", "back"), ("q", "dismiss", "back")]
+    CSS = """
+    ArtifactsScreen { align: center middle; }
+    #ahead { color: #33ff66; text-style: bold; padding: 0 2 1 2; }
+    OptionList { width: 86%; max-width: 100; height: auto; max-height: 70%;
+                 border: round #2bbf57; background: #0c120c; }
+    #afoot { color: #506054; padding: 0 2; }
+    """
+    _LANG = {"python": "python", "yaml": "yaml", "md": "markdown"}
+
+    def __init__(self, artifacts: list[tuple[str, Path, str]]) -> None:
+        super().__init__()
+        self._arts = artifacts
+
+    def compose(self) -> ComposeResult:
+        yield Static("artifacts this run produced", id="ahead")
+        yield OptionList(*[f"{label}    ({path.name})" for label, path, _ in self._arts],
+                         id="artifacts")
+        yield Static("up/down to choose, enter to view, esc to go back", id="afoot")
+
+    def on_mount(self) -> None:
+        self.query_one("#artifacts", OptionList).focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        label, path, kind = self._arts[event.option_index]
+        try:
+            content = path.read_text(encoding="utf-8")
+        except Exception as e:  # noqa: BLE001
+            content = f"(could not read {path}: {e})"
+        md = content if kind == "md" else f"```{self._LANG.get(kind, '')}\n{content}\n```"
+        self.app.push_screen(MarkdownScreen(label, md))
 
     def action_dismiss(self) -> None:  # type: ignore[override]
         self.app.pop_screen()

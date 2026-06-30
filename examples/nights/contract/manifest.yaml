@@ -1,0 +1,36 @@
+# holdtrue contract manifest. The human-reviewed source of truth.
+version: 1
+intent_id: INT-005
+summary: "nights(stay) returns the days between checkin and checkout; at least 1."
+signature: "nights(stay: Stay) -> int"
+function: nights
+
+models: "models.py"
+enforcement: runtime
+
+interrogated_axes:
+  - exact value (result == (checkout - checkin).days)
+  - at least one night (result >= 1)
+  - precondition (checkout > checkin, enforced by the Stay model)
+  - raises nothing on a valid stay
+
+checks:
+  crosshair:
+    decorators:
+      - "@deal.ensure(lambda stay, result: result == (stay.checkout - stay.checkin).days)"
+      - "@deal.ensure(lambda stay, result: result >= 1)"
+      - "@deal.raises()"
+    guarantee_if_exhausted: GUARANTEED
+  hypothesis_shown: "tests_shown/test_nights.py"
+  hypothesis_heldout: "tests_heldout/test_nights_heldout.py"
+  mutation:
+    threshold: 0.85
+
+negative_probe:
+  must_reject:
+    - "return 0"
+    - "return 1"
+    - "return (stay.checkout - stay.checkin).days + 1"
+
+acceptance:
+  target_class: ENFORCED

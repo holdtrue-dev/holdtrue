@@ -1,0 +1,39 @@
+# holdtrue contract manifest. The human-reviewed source of truth.
+version: 1
+intent_id: INT-006
+summary: "paginate(req) returns offset, limit, and total_pages (rounded up)."
+signature: "paginate(req: PageRequest) -> Page"
+function: paginate
+
+models: "models.py"
+enforcement: runtime
+
+interrogated_axes:
+  - offset (== (page - 1) * page_size)
+  - limit (== page_size)
+  - total_pages (ceil(total / page_size))
+  - non-negative offset
+  - raises nothing on a valid request
+
+checks:
+  crosshair:
+    decorators:
+      - "@deal.ensure(lambda req, result: result.offset == (req.page - 1) * req.page_size)"
+      - "@deal.ensure(lambda req, result: result.limit == req.page_size)"
+      - "@deal.ensure(lambda req, result: result.total_pages == (req.total + req.page_size - 1) // req.page_size)"
+      - "@deal.ensure(lambda req, result: result.offset >= 0)"
+      - "@deal.raises()"
+    guarantee_if_exhausted: GUARANTEED
+  hypothesis_shown: "tests_shown/test_paginate.py"
+  hypothesis_heldout: "tests_heldout/test_paginate_heldout.py"
+  mutation:
+    threshold: 0.85
+
+negative_probe:
+  must_reject:
+    - "return Page(offset=0, limit=req.page_size, total_pages=0)"
+    - "return Page(offset=(req.page - 1) * req.page_size, limit=req.page_size, total_pages=req.total // req.page_size)"
+    - "return Page(offset=req.page * req.page_size, limit=req.page_size, total_pages=(req.total + req.page_size - 1) // req.page_size)"
+
+acceptance:
+  target_class: ENFORCED

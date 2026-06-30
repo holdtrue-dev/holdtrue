@@ -43,7 +43,7 @@ Verify a correct implementation against its contract:
 uv run python -m holdtrue.cli verify examples/clamp --impl examples/clamp/controls/correct.py
 ```
 
-Swap in `controls/buggy.py` for a `FAILED`, point at `examples/repeat` for an `ENFORCED` (a string function CrossHair cannot prove but the contract still enforces), or add `--manifest contract/manifest_weak.yaml` to watch a correct function get refused a guarantee because the contract itself is too weak.
+Swap in `controls/buggy.py` for a `FAILED`. Point at `examples/checkout` for a realistic `ENFORCED`: a pydantic shopping-cart total CrossHair cannot prove, but the contract enforces it on every call (`examples/nights` and `examples/pagination` are the same idea over dates and page maths). Or add `--manifest contract/manifest_weak.yaml` to watch a correct function get refused a guarantee because the contract itself is too weak.
 
 Watch a verification stream live in a TUI:
 

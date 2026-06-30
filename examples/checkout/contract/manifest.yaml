@@ -1,0 +1,43 @@
+# holdtrue contract manifest. The human-reviewed source of truth.
+version: 1
+intent_id: INT-004
+summary: "checkout(cart) returns subtotal, discount, and total; total = subtotal - discount, never negative."
+signature: "checkout(cart: Cart) -> Receipt"
+function: checkout
+
+# The shared pydantic types. The bounds on these (qty positive, price non-negative,
+# discount 0..100, receipt amounts non-negative) are enforced at runtime on every
+# construction, so this is an ENFORCED contract, not a proven one.
+models: "models.py"
+enforcement: runtime
+
+interrogated_axes:
+  - subtotal (sum of qty * unit_price over the line items)
+  - discount (subtotal * discount_pct // 100)
+  - total (subtotal - discount)
+  - non-negative (every amount >= 0)
+  - raises nothing on a valid cart
+
+checks:
+  crosshair:
+    decorators:
+      - "@deal.ensure(lambda cart, result: result.subtotal_cents == sum(i.qty * i.unit_price_cents for i in cart.items))"
+      - "@deal.ensure(lambda cart, result: result.discount_cents == result.subtotal_cents * cart.discount_pct // 100)"
+      - "@deal.ensure(lambda cart, result: result.total_cents == result.subtotal_cents - result.discount_cents)"
+      - "@deal.ensure(lambda cart, result: result.total_cents >= 0)"
+      - "@deal.raises()"
+    guarantee_if_exhausted: GUARANTEED
+
+  hypothesis_shown: "tests_shown/test_checkout.py"
+  hypothesis_heldout: "tests_heldout/test_checkout_heldout.py"
+  mutation:
+    threshold: 0.85
+
+negative_probe:
+  must_reject:
+    - "return Receipt(subtotal_cents=0, discount_cents=0, total_cents=0)"
+    - "sub = sum(i.qty * i.unit_price_cents for i in cart.items); return Receipt(subtotal_cents=sub, discount_cents=0, total_cents=sub)"
+    - "sub = sum(i.qty * i.unit_price_cents for i in cart.items); disc = sub * cart.discount_pct // 100; return Receipt(subtotal_cents=sub, discount_cents=disc, total_cents=sub)"
+
+acceptance:
+  target_class: ENFORCED

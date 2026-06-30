@@ -80,6 +80,7 @@ def run_crosshair(
     impl_source: str,
     *,
     function: str = "clamp",
+    extra: dict[str, str] | None = None,
     sandbox_on: bool = True,
     per_condition_timeout: float = 10.0,
     timeout: float = 120.0,
@@ -88,6 +89,8 @@ def run_crosshair(
     try:
         chk = Path(work) / "chk.py"
         chk.write_text(_splice(decorators, impl_source, function), encoding="utf-8")
+        for name, src in (extra or {}).items():
+            (Path(work) / name).write_text(src, encoding="utf-8")
         cmd = [
             CROSSHAIR, "check", "--analysis_kind=deal",
             f"--per_condition_timeout={per_condition_timeout}", "-v", "chk.py",
@@ -124,11 +127,13 @@ def _parse_counterexample(stdout: str) -> str | None:
 # --------------------------------------------------------------------------- #
 # Types (the gate)
 # --------------------------------------------------------------------------- #
-def run_types(check_id: str, impl_source: str, *, sandbox_on: bool = True,
-              timeout: float = 60.0) -> CheckResult:
+def run_types(check_id: str, impl_source: str, *, extra: dict[str, str] | None = None,
+              sandbox_on: bool = True, timeout: float = 60.0) -> CheckResult:
     work = tempfile.mkdtemp(prefix="holdtrue_ty_")
     try:
         (Path(work) / "core.py").write_text(impl_source, encoding="utf-8")
+        for name, src in (extra or {}).items():
+            (Path(work) / name).write_text(src, encoding="utf-8")
         cmd = [PYBIN, "-m", "mypy", "--strict", "--no-error-summary", "core.py"]
         r = sandbox.run(cmd, rw_dirs=[work], workdir=work, timeout=timeout, sandbox=sandbox_on)
         if r.rc == 0:
@@ -192,6 +197,34 @@ def run_negative_probe(check_id: str, signature: str, decorators: list[str],
                            extra={"survivors": survivors})
     return CheckResult(check_id, "negative_probe", "pass",
                        detail=f"contract rejects all {len(must_reject)} broken bodies.")
+
+
+def run_negative_probe_runtime(check_id: str, signature: str, decorators: list[str],
+                               must_reject: list[str], shown_src: str, *,
+                               function: str = "clamp", prelude: str = "",
+                               deps: dict[str, str] | None = None,
+                               sandbox_on: bool = True) -> CheckResult:
+    """The runtime counterpart of the negative-probe, for contracts CrossHair cannot
+    reason over (pydantic models, rich types). Each broken body is spliced with the
+    contract and run against the shown property: a strong contract makes the property
+    FAIL (the deal postcondition raises, or the result disagrees). A body that passes
+    the property survived, so the contract is too weak over the sample."""
+    survivors = []
+    for body in must_reject:
+        impl = prelude + _body_to_function(signature, body)
+        core = _splice(decorators, impl, function)
+        r = run_pytest(f"{check_id}:{body}", "probe", shown_src, core, deps=deps,
+                       sandbox_on=sandbox_on)
+        if r.status != "fail":  # the property did not reject this broken body
+            survivors.append({"body": body, "result": r.status})
+    if survivors:
+        return CheckResult(check_id, "negative_probe", "fail",
+                           detail=f"contract failed to reject {len(survivors)} broken "
+                                  f"implementation(s) at runtime",
+                           extra={"survivors": survivors})
+    return CheckResult(check_id, "negative_probe", "pass",
+                       detail=f"contract rejects all {len(must_reject)} broken bodies "
+                              "at runtime.")
 
 
 # --------------------------------------------------------------------------- #

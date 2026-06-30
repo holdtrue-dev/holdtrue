@@ -11,7 +11,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import agents, changelog, engine, providers, report, revise, sandbox, verify
+from . import (agents, changelog, crosscheck, engine, providers, report, revise,
+               sandbox, verify)
 from .classify import FAILED
 
 
@@ -207,6 +208,58 @@ def cmd_tui(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cross_check(project: Path, manifest: dict, prov, template: Path, args: argparse.Namespace) -> dict:
+    """A second author writes a contract from the same intent; any axis it pins that
+    the approved contract misses is proposed as a (non-weakening) addition. Returns the
+    possibly-strengthened manifest."""
+    print(f"\n  cross-check: a second author writes a contract from the same intent "
+          f"(provider: {prov.name}) ...")
+    b_dir = Path(tempfile.mkdtemp(prefix="holdtrue_author2_"))
+    crosscheck.second_author_contract(project, template, prov, b_dir)
+    if not (b_dir / "contract" / "manifest.yaml").exists():
+        print("  second author produced no contract; skipping cross-check.")
+        return manifest
+
+    staged = revise.stage_contract(project, Path(tempfile.mkdtemp(prefix="holdtrue_merge_")))
+    crosscheck.propose_merge(staged, b_dir, prov)
+    merged = verify.load_manifest(staged, "contract/manifest.yaml")
+    if not crosscheck.added_anything(manifest, merged):
+        print("  no missing axis: the contract already covers what the second author pinned.")
+        return manifest
+
+    diff = revise.contract_diff(manifest, merged)
+    note = revise.justification(staged)
+    print("\n  the second author pinned an axis the contract was missing:")
+    print("    " + diff.replace("\n", "\n    "))
+    print(f"\n  justification: {note}")
+    ok, reason = revise.not_weaker(staged, manifest, merged)
+    if not ok:
+        print(f"\n  REFUSED: the proposed addition is {reason}. Keeping the contract as-is.")
+        changelog.record(project, trigger="second-author", evidence="missing axis",
+                         diff=diff, justification=note, approved_by="refused (ratchet)", applied=False)
+        return manifest
+    approved, who = _approve_revision(args)
+    changelog.record(project, trigger="second-author", evidence="missing axis",
+                     diff=diff, justification=note, approved_by=who, applied=approved)
+    if not approved:
+        print("  addition not applied.")
+        return manifest
+    revise.apply(staged, project)
+    print("  addition applied.")
+    return verify.load_manifest(project, args.manifest)
+
+
+def cmd_crosscheck(args: argparse.Namespace) -> int:
+    prov = _provider(args)
+    if prov is None:
+        return 1
+    project = Path(args.project).resolve()
+    manifest = verify.load_manifest(project, args.manifest)
+    print(f"\nholdtrue cross-check  {manifest.get('intent_id')}")
+    _cross_check(project, manifest, prov, Path(args.template).resolve(), args)
+    return 0
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """The full loop: author -> self-check -> approve -> implement -> verify,
     re-spawning the implementer with a counterexample on a FAILED round."""
@@ -231,6 +284,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     if revised is None:
         return 1
     manifest = revised
+
+    if args.cross_check:
+        manifest = _cross_check(project, manifest, prov, Path(args.template).resolve(), args)
 
     print("\n  contract:")
     print(f"    {manifest.get('signature')}")
@@ -356,7 +412,22 @@ def main(argv: list[str] | None = None) -> int:
                     help="do not propose contract revisions; stop on a self-check failure")
     ru.add_argument("--auto-revise", action="store_true",
                     help="apply a revision automatically when it passes the ratchet (else ask)")
+    ru.add_argument("--cross-check", action="store_true",
+                    help="a second author cross-checks the contract for a missing axis")
     ru.set_defaults(func=cmd_run)
+
+    cc = sub.add_parser("cross-check",
+                        help="a second author writes a contract from the same intent; "
+                             "propose any axis the approved contract misses")
+    cc.add_argument("project", help="path to the project-under-contract")
+    cc.add_argument("--manifest", default="contract/manifest.yaml")
+    cc.add_argument("--template", default="examples/clamp",
+                    help="a contract bundle the second author uses as a format example")
+    cc.add_argument("--provider", help="which LLM provider to use (default: claude)")
+    cc.add_argument("--yes", action="store_true")
+    cc.add_argument("--auto-revise", action="store_true",
+                    help="apply an addition automatically when it passes the ratchet (else ask)")
+    cc.set_defaults(func=cmd_crosscheck)
 
     st = sub.add_parser("studio",
                         help="interactive TUI: pick a provider, type an intent, run the loop")

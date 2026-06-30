@@ -83,7 +83,10 @@ def contract_diff(old: dict, new: dict) -> str:
     must_reject list."""
     def lines(m: dict) -> list[str]:
         decos = m.get("checks", {}).get("crosshair", {}).get("decorators", [])
-        return [m.get("signature", "")] + decos + [f"must_reject: {b}" for b in _must_reject(m)]
+        axes = m.get("interrogated_axes", [])
+        return ([m.get("signature", "")] + decos
+                + [f"axis: {a}" for a in axes]
+                + [f"must_reject: {b}" for b in _must_reject(m)])
     diff = difflib.unified_diff(lines(old), lines(new), "current", "proposed", lineterm="")
     return "\n".join(diff)
 

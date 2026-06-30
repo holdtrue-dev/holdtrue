@@ -28,7 +28,7 @@ from textual.widgets import (Button, DataTable, Footer, Input, Markdown,
 
 from . import (agents, changelog, engine, providers, report, revise, sandbox,
                verify)
-from .classify import FAILED, GUARANTEED, UNGUARANTEED
+from .classify import ENFORCED, FAILED, GUARANTEED, UNGUARANTEED
 from .tui import CheckDetail, _BANNER, _COLOR, _ICON, _LABEL
 
 _HOURGLASS = ("⏳", "⌛")
@@ -40,10 +40,12 @@ _DIM = "#7e9387"
 _QUEUED = "#3a4a40"
 _RUN = "#f3c54e"
 _INK = "#cdddd2"
-_VERDICT_COLOR = {GUARANTEED: _OK, UNGUARANTEED: _WARN, FAILED: _BAD}
-_VERDICT_GLYPH = {GUARANTEED: "✓", UNGUARANTEED: "~", FAILED: "✗"}
+_ENF = "#2bd6c0"
+_VERDICT_COLOR = {GUARANTEED: _OK, ENFORCED: _ENF, UNGUARANTEED: _WARN, FAILED: _BAD}
+_VERDICT_GLYPH = {GUARANTEED: "✓", ENFORCED: "⊨", UNGUARANTEED: "~", FAILED: "✗"}
 _VERDICT_MEANING = {
     GUARANTEED: "proven over all inputs; the contract caught injected bugs and rejected broken stand-ins.",
+    ENFORCED: "checked at runtime on every call and clean over every sample, but not proven over all inputs.",
     UNGUARANTEED: "only sampled evidence, not a proof. still needs human review.",
     FAILED: "a counterexample was found: the contract does not hold.",
 }

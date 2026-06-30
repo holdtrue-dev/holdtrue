@@ -16,7 +16,7 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Static
 
 from . import engine, sandbox, verify
-from .classify import Classification, FAILED, GUARANTEED, UNGUARANTEED
+from .classify import Classification, ENFORCED, FAILED, GUARANTEED, UNGUARANTEED
 
 # The turnstile logo and the wordmark, side by side (hardcoded: pyfiglet is not a
 # runtime dependency). Matches the brand banner.
@@ -39,7 +39,7 @@ _LABEL = {"types": "types", "crosshair": "proof",
           "hypothesis_shown": "properties (shown)",
           "hypothesis_heldout": "properties (held-out)",
           "negative_probe": "negative-probe", "mutation": "mutation"}
-_VERDICT_CLASS = {GUARANTEED: "ok", UNGUARANTEED: "warn", FAILED: "bad"}
+_VERDICT_CLASS = {GUARANTEED: "ok", ENFORCED: "enforced", UNGUARANTEED: "warn", FAILED: "bad"}
 _QUEUED = "#3a4a40"
 _RUN = "#f3c54e"
 
@@ -114,6 +114,7 @@ class HoldtrueTUI(App):
     #verdict { margin: 1 2; padding: 1 2; text-align: center; text-style: bold;
                border: heavy #18241d; color: #7e9387; }
     #verdict.ok { color: #33ff66; border: heavy #33ff66; }
+    #verdict.enforced { color: #2bd6c0; border: heavy #2bd6c0; }
     #verdict.warn { color: #f3c54e; border: heavy #f3c54e; }
     #verdict.bad { color: #ff5f5f; border: heavy #ff5f5f; }
     """

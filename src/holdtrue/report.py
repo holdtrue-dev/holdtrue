@@ -9,10 +9,10 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 
-from .classify import Classification, GUARANTEED, UNGUARANTEED, FAILED
+from .classify import Classification, ENFORCED, GUARANTEED, UNGUARANTEED, FAILED
 from .engine import CheckResult
 
-_BADGE = {GUARANTEED: "GUARANTEED", UNGUARANTEED: "UNGUARANTEED",
+_BADGE = {GUARANTEED: "GUARANTEED", ENFORCED: "ENFORCED", UNGUARANTEED: "UNGUARANTEED",
           FAILED: "FAILED", "NON_DETERMINISTIC": "NON-DETERMINISTIC"}
 
 
@@ -91,6 +91,11 @@ def render_md(report: dict) -> str:
         lines.append("> GUARANTEED means the code provably satisfies the approved "
                      "contract over all inputs. It does not mean the contract matches "
                      "what you meant. You still own the contract.")
+    elif c == ENFORCED:
+        lines.append("> ENFORCED means the contract is checked at runtime on every call "
+                     "(a violating input raises, it does not pass silently) and holds over "
+                     "every sampled input, but it was not proven over all inputs. Ship it "
+                     "with the contract attached. You still own the contract.")
     elif c == UNGUARANTEED:
         lines.append("> UNGUARANTEED is a normal result. holdtrue got all the evidence it "
                      "soundly can; this intent still needs human code review.")

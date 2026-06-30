@@ -1,0 +1,40 @@
+# holdtrue contract manifest. The human-reviewed source of truth.
+version: 1
+intent_id: INT-003
+summary: "repeat(s, n) returns s concatenated n times; requires n >= 0."
+signature: "repeat(s: str, n: int) -> str"
+function: repeat
+
+# Which axes of intent were interrogated. Shown in the report so gaps stay visible.
+interrogated_axes:
+  - exact value (result == s * n)
+  - precondition (n >= 0)
+  - empty (n == 0 returns "")
+  - raises nothing
+
+checks:
+  # Spliced onto the implementer's function. CrossHair cannot exhaust string
+  # repetition over a symbolic count, so this lands ENFORCED, not GUARANTEED:
+  # the contract is checked at runtime on every call, just not proven.
+  crosshair:
+    decorators:
+      - "@deal.pre(lambda s, n: n >= 0)"
+      - "@deal.ensure(lambda s, n, result: result == s * n)"
+      - "@deal.raises()"
+    guarantee_if_exhausted: GUARANTEED
+
+  hypothesis_shown: "tests_shown/test_repeat.py"               # implementer may read
+  hypothesis_heldout: "tests_heldout/test_repeat_heldout.py"   # implementer never sees
+  mutation:
+    threshold: 0.85
+
+# Each broken body must be rejected by the contract, or the intent is downgraded.
+negative_probe:
+  must_reject:
+    - "return s"
+    - "return ''"
+    - "return s + s"
+    - "return s * n + s"
+
+acceptance:
+  target_class: ENFORCED

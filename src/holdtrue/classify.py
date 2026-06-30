@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from .engine import CheckResult
 
 GUARANTEED = "GUARANTEED"
+ENFORCED = "ENFORCED"
 UNGUARANTEED = "UNGUARANTEED"
 FAILED = "FAILED"
 NON_DETERMINISTIC = "NON_DETERMINISTIC"
@@ -77,6 +78,8 @@ def classify(intent_id: str, results: dict[str, CheckResult]) -> Classification:
     proven = bool(crosshair and crosshair.status == "confirmed")
     probe_ok = bool(probe and probe.status == "pass")
     types_ok = bool(types and types.status == "pass")
+    shown_ok = bool(shown and shown.status == "pass")
+    heldout_ok = bool(heldout and heldout.status == "pass")
 
     if proven and probe_ok and types_ok:
         reasons = [
@@ -91,6 +94,29 @@ def classify(intent_id: str, results: dict[str, CheckResult]) -> Classification:
             "Proven exhaustively over the input domain, against a contract the "
             "negative-probe shows is non-vacuous.",
             requires_human_code_review=False, reasons=reasons,
+        )
+
+    # --- 2b. ENFORCED: not proven, but the contract is real and runtime-checked #
+    # The deal contract is enforced on every call, so a violating input raises
+    # rather than passing silently. With a non-vacuous contract (negative-probe) and
+    # clean shown + held-out samples, this is shippable, just not proven over all
+    # inputs. This is the honest tier for shapes CrossHair cannot exhaust (strings,
+    # lists, floats, loops).
+    if not proven and probe_ok and types_ok and shown_ok and heldout_ok:
+        no_proof = crosshair.detail if crosshair else "CrossHair not run"
+        return Classification(
+            intent_id, ENFORCED, (crosshair.check_id if crosshair else "crosshair"),
+            "Enforced at runtime by the contract and clean over every sampled input, "
+            "but not proven over all inputs.",
+            requires_human_code_review=False,
+            reasons=[
+                "runtime-enforced: the deal contract is checked on every call, so a "
+                "violating input raises instead of passing silently.",
+                f"negative-probe: {probe.detail}",
+                f"properties: hold over shown and held-out samples ({shown.detail}).",
+                f"types: {types.detail}",
+                f"not proven: {no_proof}",
+            ],
         )
 
     # --- 3. Otherwise UNGUARANTEED, with the honest reason ------------------ #

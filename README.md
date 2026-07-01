@@ -72,9 +72,9 @@ Clone, sync, verify:
 ```
 git clone https://github.com/holdtrue-dev/holdtrue
 cd holdtrue && uv sync
+source .venv/bin/activate
 
-uv run python -m holdtrue.cli verify examples/clamp \
-              --impl examples/clamp/controls/correct.py
+holdtrue verify examples/clamp --impl examples/clamp/controls/correct.py
 ```
 
 Swap in `controls/buggy.py` for a `FAILED`. Point at `examples/checkout` for a realistic `ENFORCED`: a pydantic shopping-cart total CrossHair cannot prove, but the contract enforces it on every call (`examples/nights` and `examples/pagination` are the same idea over dates and page maths). Or add `--manifest contract/manifest_weak.yaml` to watch a correct function get refused a guarantee because the contract itself is too weak.
@@ -84,19 +84,19 @@ Swap in `controls/buggy.py` for a `FAILED`. Point at `examples/checkout` for a r
 Watch a verification stream live in a TUI:
 
 ```
-uv run python -m holdtrue.cli tui examples/clamp --impl examples/clamp/controls/correct.py
+holdtrue tui examples/clamp --impl examples/clamp/controls/correct.py
 ```
 
 Drive the whole loop in a TUI: pick a provider and model, type an intent, approve the contract, watch it run to a verdict:
 
 ```
-uv run python -m holdtrue.cli studio
+holdtrue studio
 ```
 
 Or run the loop from the command line (author, self-check, approve, implement, verify):
 
 ```
-uv run python -m holdtrue.cli run examples/clamp --yes
+holdtrue run examples/clamp --yes
 ```
 
 ## never-silent revision

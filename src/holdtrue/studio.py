@@ -852,8 +852,13 @@ class StudioApp(App):
             project = base / name if name else base
         project.mkdir(parents=True, exist_ok=True)
         (project / "intent").mkdir(parents=True, exist_ok=True)
-        (project / "intent" / "intent.md").write_text(
-            f"# Intent: {name or project.name}\n\n{intent}\n", encoding="utf-8")
+        # Prose typed in the TUI gets a header; an intent that already starts with one
+        # (e.g. read from a file via --intent @path) is written as-is, so re-running
+        # never stacks a second "# Intent:" on top of it.
+        text = intent.strip()
+        if not text.startswith("#"):
+            text = f"# Intent: {name or project.name}\n\n{text}"
+        (project / "intent" / "intent.md").write_text(text + "\n", encoding="utf-8")
         self._project = project
         self.push_screen(RunScreen())
 

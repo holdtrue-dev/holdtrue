@@ -16,12 +16,21 @@ _BADGE = {GUARANTEED: "GUARANTEED", ENFORCED: "ENFORCED", UNGUARANTEED: "UNGUARA
           FAILED: "FAILED", "NON_DETERMINISTIC": "NON-DETERMINISTIC"}
 
 
+def _signatures(manifest: dict) -> list[str]:
+    if "functions" in manifest:
+        return [f["signature"] for f in manifest["functions"]]
+    sig = manifest.get("signature")
+    return [sig] if sig else []
+
+
 def build_report(manifest: dict, impl_label: str, results: dict[str, CheckResult],
                  classification: Classification, sandboxed: bool) -> dict:
+    sigs = _signatures(manifest)
     return {
         "intent_id": manifest.get("intent_id"),
         "summary": manifest.get("summary"),
-        "signature": manifest.get("signature"),
+        "signature": " ; ".join(sigs),
+        "signatures": sigs,
         "implementation": impl_label,
         "classification": classification.classification,
         "deciding_check": classification.deciding_check,
@@ -49,12 +58,19 @@ def _check_dict(r: CheckResult) -> dict:
 
 def render_md(report: dict) -> str:
     c = report["classification"]
+    sigs = report.get("signatures") or ([report["signature"]] if report.get("signature") else [])
     lines = [
         "# holdtrue evidence report",
         "",
         f"**Intent `{report['intent_id']}`**: {report['summary']}",
         "",
-        f"`{report['signature']}`  ·  implementation: `{report['implementation']}`",
+    ]
+    if len(sigs) > 1:
+        lines.append(f"implementation: `{report['implementation']}`  ·  {len(sigs)} functions:")
+        lines += [f"- `{s}`" for s in sigs]
+    else:
+        lines.append(f"`{report['signature']}`  ·  implementation: `{report['implementation']}`")
+    lines += [
         "",
         f"## Verdict: {_BADGE.get(c, c)}",
         "",

@@ -88,6 +88,20 @@ def _on_result(r: engine.CheckResult) -> None:
     print(f"  {r.status.upper():11} {r.kind:18} {r.detail[:60]}")
 
 
+def _print_contract(manifest: dict) -> None:
+    """Print the signature(s) and the conditions that must hold, for a single-function
+    or a multi-function contract."""
+    if "functions" in manifest:
+        for f in manifest["functions"]:
+            print(f"    {f['signature']}")
+            for d in f.get("decorators", []):
+                print(f"      {d}")
+        return
+    print(f"    {manifest.get('signature')}")
+    for d in manifest.get("checks", {}).get("crosshair", {}).get("decorators", []):
+        print(f"    {d}")
+
+
 def _finish(project: Path, impl_label: str, manifest: dict, results: dict,
             cls, sb: bool) -> None:
     rep = report.build_report(manifest, impl_label, results, cls,
@@ -290,9 +304,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         manifest = _cross_check(project, manifest, prov, Path(args.template).resolve(), args)
 
     print("\n  contract:")
-    print(f"    {manifest.get('signature')}")
-    for d in manifest.get("checks", {}).get("crosshair", {}).get("decorators", []):
-        print(f"    {d}")
+    _print_contract(manifest)
     if not args.yes:
         try:
             ans = input("\n[3] approve this contract and implement? [y/N] ").strip().lower()

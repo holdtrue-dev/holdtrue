@@ -1,0 +1,72 @@
+# holdtrue contract manifest. The human-reviewed source of truth.
+# A multi-function contract: several functions in one module, each proven on its own.
+version: 1
+intent_id: INT-007
+summary: "chessboard square maths: index, light-square, king distance, knight move."
+
+functions:
+  - function: square_index
+    signature: "square_index(file: int, rank: int) -> int"
+    decorators:
+      - "@deal.pre(lambda file, rank: 0 <= file <= 7 and 0 <= rank <= 7)"
+      - "@deal.ensure(lambda file, rank, result: result == rank * 8 + file)"
+      - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return 0"
+        - "return file"
+        - "return rank"
+        - "return file * 8 + rank"
+
+  - function: is_light_square
+    signature: "is_light_square(file: int, rank: int) -> bool"
+    decorators:
+      - "@deal.pre(lambda file, rank: 0 <= file <= 7 and 0 <= rank <= 7)"
+      - "@deal.ensure(lambda file, rank, result: result == ((file + rank) % 2 == 1))"
+      - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return True"
+        - "return False"
+        - "return (file + rank) % 2 == 0"
+
+  - function: king_distance
+    signature: "king_distance(f1: int, r1: int, f2: int, r2: int) -> int"
+    decorators:
+      - "@deal.pre(lambda f1, r1, f2, r2: 0 <= f1 <= 7 and 0 <= r1 <= 7 and 0 <= f2 <= 7 and 0 <= r2 <= 7)"
+      - "@deal.ensure(lambda f1, r1, f2, r2, result: result == max(abs(f1 - f2), abs(r1 - r2)))"
+      - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return 0"
+        - "return abs(f1 - f2)"
+        - "return abs(f1 - f2) + abs(r1 - r2)"
+        - "return min(abs(f1 - f2), abs(r1 - r2))"
+
+  - function: is_knight_move
+    signature: "is_knight_move(f1: int, r1: int, f2: int, r2: int) -> bool"
+    decorators:
+      - "@deal.pre(lambda f1, r1, f2, r2: 0 <= f1 <= 7 and 0 <= r1 <= 7 and 0 <= f2 <= 7 and 0 <= r2 <= 7)"
+      - "@deal.ensure(lambda f1, r1, f2, r2, result: result == ((abs(f1 - f2) == 1 and abs(r1 - r2) == 2) or (abs(f1 - f2) == 2 and abs(r1 - r2) == 1)))"
+      - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return True"
+        - "return False"
+        - "return abs(f1 - f2) == 1 and abs(r1 - r2) == 2"
+
+interrogated_axes:
+  - square index is rank * 8 + file over the 8x8 board
+  - a square is light when file + rank is odd
+  - king distance is the Chebyshev distance, max of the two gaps
+  - a knight move is gaps of one and two in either order
+  - each function raises nothing on an on-board input
+
+checks:
+  hypothesis_shown: "tests_shown/test_chess.py"
+  hypothesis_heldout: "tests_heldout/test_chess_heldout.py"
+  mutation:
+    threshold: 0.85
+
+acceptance:
+  target_class: GUARANTEED

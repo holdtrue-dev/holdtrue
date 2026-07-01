@@ -99,6 +99,16 @@ Or run the loop from the command line (author, self-check, approve, implement, v
 holdtrue run examples/clamp --yes
 ```
 
+## many functions, one contract
+
+A contract can pin more than one function. `examples/dnd` is a Dungeons and Dragons character sheet in four functions:
+
+```
+holdtrue verify examples/dnd --impl examples/dnd/controls/correct.py
+```
+
+`ability_modifier` and `proficiency_bonus` are the building blocks; `spell_save_dc` and `attack_bonus` are built from them. Each function is proven on its own, so the verdict is reported per function and the whole is only as strong as its weakest part. All four come back `GUARANTEED`. Swap in `controls/buggy.py` and the verdict is `FAILED`, naming the one function that broke and the input that breaks it, while the other three still read `GUARANTEED`. `examples/chess` (board geometry) and `examples/clock` (wall-clock maths) are the same idea.
+
 ## never-silent revision
 
 When verification shows the contract was wrong, holdtrue does not go silent. A self-check failure proposes a fix back to you; a second author cross-checks for an axis the contract misses (`holdtrue cross-check`); a run that cannot pass is diagnosed. A ratchet forbids weakening a check to pass, every change waits for your approval, and each one is recorded in `<project>/revisions/`.

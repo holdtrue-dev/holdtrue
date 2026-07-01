@@ -1,0 +1,75 @@
+# holdtrue contract manifest. The human-reviewed source of truth.
+# A multi-function contract: several functions in one module, each proven on its own.
+version: 1
+intent_id: INT-006
+summary: "the core D&D 5e character numbers: ability modifier, proficiency bonus, spell save DC, attack bonus."
+
+# Each function is spliced with its own decorators and proven over its own domain.
+# The overall verdict is the weakest function's verdict, so GUARANTEED means every
+# function was proven exhaustively.
+functions:
+  - function: ability_modifier
+    signature: "ability_modifier(score: int) -> int"
+    decorators:
+      - "@deal.pre(lambda score: 1 <= score <= 30)"
+      - "@deal.ensure(lambda score, result: result == (score - 10) // 2)"
+      - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return 0"
+        - "return score"
+        - "return score // 2"
+        - "return (score - 10) // 2 + 1"
+
+  - function: proficiency_bonus
+    signature: "proficiency_bonus(level: int) -> int"
+    decorators:
+      - "@deal.pre(lambda level: 1 <= level <= 20)"
+      - "@deal.ensure(lambda level, result: result == 2 + (level - 1) // 4)"
+      - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return 2"
+        - "return level"
+        - "return 2 + level // 4"
+        - "return (level - 1) // 4"
+
+  - function: spell_save_dc
+    signature: "spell_save_dc(score: int, level: int) -> int"
+    decorators:
+      - "@deal.pre(lambda score, level: 1 <= score <= 30 and 1 <= level <= 20)"
+      - "@deal.ensure(lambda score, level, result: result == 8 + (2 + (level - 1) // 4) + ((score - 10) // 2))"
+      - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return 8"
+        - "return 8 + (score - 10) // 2"
+        - "return 10 + (2 + (level - 1) // 4) + ((score - 10) // 2)"
+
+  - function: attack_bonus
+    signature: "attack_bonus(score: int, level: int, proficient: bool) -> int"
+    decorators:
+      - "@deal.pre(lambda score, level, proficient: 1 <= score <= 30 and 1 <= level <= 20)"
+      - "@deal.ensure(lambda score, level, proficient, result: result == (score - 10) // 2 + ((2 + (level - 1) // 4) if proficient else 0))"
+      - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return 0"
+        - "return (score - 10) // 2"
+        - "return (score - 10) // 2 + (2 + (level - 1) // 4)"
+
+interrogated_axes:
+  - ability modifier is floor((score - 10) / 2) over scores 1..30
+  - proficiency bonus is 2 + (level - 1) // 4 over levels 1..20
+  - spell save DC composes the proficiency bonus and the ability modifier (8 + prof + mod)
+  - attack bonus adds the proficiency bonus only when proficient
+  - each function raises nothing on a valid input
+
+checks:
+  hypothesis_shown: "tests_shown/test_dnd.py"
+  hypothesis_heldout: "tests_heldout/test_dnd_heldout.py"
+  mutation:
+    threshold: 0.85
+
+acceptance:
+  target_class: GUARANTEED

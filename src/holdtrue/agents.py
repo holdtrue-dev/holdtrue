@@ -40,6 +40,26 @@ Rules:
 - Keep the function pure: no IO, no globals, no prints.
 """
 
+_PROMPT_MULTI = """You are implementing several functions to satisfy a contract you did not write.
+
+src/core.py contains stubs for:
+
+{signatures}
+
+The contract is in contract/spec.yaml, with example tests in contract/tests_shown/.
+Write the body of every function in src/core.py so the whole contract holds for every
+input in its declared domain. The functions belong to one module and may call each
+other.
+
+Rules:
+- Edit only src/core.py. Implement every function; leave none as a stub.
+- If src/models.py exists, those are the shared contract types: import from it (it is
+  already imported at the top of the stub), and do not edit it.
+- No `type: ignore`, no `Any`, no casts.
+- Satisfy the literal contract. Do not guess at hidden intent.
+- Keep the functions pure: no IO, no globals, no prints.
+"""
+
 _AUTHOR_PROMPT = """You are the contract author. From a natural-language intent you write a
 machine-checkable contract. You do NOT write the implementation of the function.
 
@@ -108,15 +128,28 @@ def available() -> bool:
 
 
 def _impl_spec(manifest: dict) -> dict:
-    """The slice of the contract the implementer is allowed to see: the signature
+    """The slice of the contract the implementer is allowed to see: the signature(s)
     and the conditions that must hold. Held-out tests, the reference oracle, the
     mutation config, and the negative-probe stay behind the curtain."""
+    if "functions" in manifest:
+        return {
+            "summary": manifest.get("summary"),
+            "functions": [
+                {"signature": f["signature"], "function": f["function"],
+                 "must_hold": f["decorators"]}
+                for f in manifest["functions"]
+            ],
+        }
     return {
         "summary": manifest.get("summary"),
         "signature": manifest["signature"],
         "function": manifest.get("function"),
         "must_hold": manifest["checks"]["crosshair"]["decorators"],
     }
+
+
+def _stub_body(summary: str) -> str:
+    return f'    """{summary}"""\n    raise NotImplementedError\n'
 
 
 def stage_workspace(project: Path, manifest: dict, dest: Path) -> Path:
@@ -140,7 +173,12 @@ def stage_workspace(project: Path, manifest: dict, dest: Path) -> Path:
         prelude = "from models import *  # shared contract types: do not edit\n\n\n"
 
     summary = manifest.get("summary", "").replace('"', "'")
-    stub = prelude + f'def {manifest["signature"]}:\n    """{summary}"""\n    raise NotImplementedError\n'
+    if "functions" in manifest:
+        stubs = [f'def {f["signature"]}:\n{_stub_body(summary)}'
+                 for f in manifest["functions"]]
+        stub = prelude + "\n\n".join(stubs)
+    else:
+        stub = prelude + f'def {manifest["signature"]}:\n{_stub_body(summary)}'
     (dest / "src" / "core.py").write_text(stub, encoding="utf-8")
     return dest
 
@@ -181,8 +219,12 @@ def spawn_implementer(workspace: Path, manifest: dict, provider: Provider, *,
 
     On a re-spawn, `feedback` carries the counterexample from the failed round; the
     previous attempt is still in src/core.py for the context to fix."""
-    prompt = _PROMPT.format(signature=manifest["signature"],
-                            function=manifest.get("function", "clamp"))
+    if "functions" in manifest:
+        sigs = "\n".join(f"    {f['signature']}" for f in manifest["functions"])
+        prompt = _PROMPT_MULTI.format(signatures=sigs)
+    else:
+        prompt = _PROMPT.format(signature=manifest["signature"],
+                                function=manifest.get("function", "clamp"))
     if feedback:
         prompt += ("\n\nThe current src/core.py is a previous attempt that FAILED "
                    f"verification:\n{feedback}\nFix src/core.py so the contract holds for "

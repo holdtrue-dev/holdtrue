@@ -10,7 +10,8 @@ from typing import Callable
 import yaml
 
 from . import engine
-from .classify import Classification, classify
+from .classify import (Classification, FAILED, classify, classify_function,
+                       classify_multi)
 
 
 def load_manifest(project: Path, manifest_rel: str) -> dict:
@@ -29,6 +30,9 @@ def run_verification(
     mutation: bool = True,
     on_result: Callable[[engine.CheckResult], None] | None = None,
 ) -> tuple[dict[str, engine.CheckResult], Classification]:
+    if "functions" in manifest:
+        return _run_multi(project, impl_path, manifest, sandbox_on=sandbox_on,
+                          mutation=mutation, on_result=on_result)
     contract_dir = project / "contract"
     private_dir = project / "contract_private"
     impl_source = impl_path.read_text(encoding="utf-8")
@@ -88,3 +92,119 @@ def run_verification(
             threshold))
 
     return results, classify(manifest["intent_id"], results)
+
+
+def _run_multi(
+    project: Path,
+    impl_path: Path,
+    manifest: dict,
+    *,
+    sandbox_on: bool,
+    mutation: bool,
+    on_result: Callable[[engine.CheckResult], None] | None,
+) -> tuple[dict[str, engine.CheckResult], Classification]:
+    """Verify a contract that declares several functions in one module.
+
+    The types, the shown property tests, the held-out differential tests, and the
+    mutation run are all over the whole module and are shared. The proof and the
+    negative-probe are per function: each function's decorators are spliced onto that
+    function alone and proven on its own, so a weak spot in one function cannot borrow
+    another function's proof. The overall verdict is the weakest function's verdict.
+    """
+    contract_dir = project / "contract"
+    private_dir = project / "contract_private"
+    impl_source = impl_path.read_text(encoding="utf-8")
+
+    checks = manifest["checks"]
+    functions = manifest["functions"]
+    shown_src = (contract_dir / checks["hypothesis_shown"]).read_text(encoding="utf-8")
+    heldout_src = (private_dir / checks["hypothesis_heldout"]).read_text(encoding="utf-8")
+    ref_src = (private_dir / "reference_impl.py").read_text(encoding="utf-8")
+    threshold = checks.get("mutation", {}).get("threshold", 0.85)
+
+    models_rel = manifest.get("models")
+    models_src = (contract_dir / models_rel).read_text(encoding="utf-8") if models_rel else None
+    shared = {"models.py": models_src} if models_src else {}
+
+    results: dict[str, engine.CheckResult] = {}
+
+    def emit(key: str, r: engine.CheckResult) -> None:
+        results[key] = r
+        if on_result:
+            on_result(r)
+
+    # Shared checks, over the whole module, once.
+    types = engine.run_types("CHK-types", impl_source, extra=shared, sandbox_on=sandbox_on)
+    emit("types", types)
+    shown = engine.run_pytest("CHK-prop-shown", "hypothesis_shown", shown_src, impl_source,
+                              deps=dict(shared), sandbox_on=sandbox_on)
+    emit("hypothesis_shown", shown)
+    heldout = engine.run_pytest("CHK-prop-heldout", "hypothesis_heldout", heldout_src,
+                                impl_source, deps={"reference_impl.py": ref_src, **shared},
+                                sandbox_on=sandbox_on)
+    emit("hypothesis_heldout", heldout)
+    mut = None
+    if mutation:
+        mut = engine.run_mutation(
+            "CHK-mutation", impl_source,
+            {"test_shown.py": shown_src, "test_heldout.py": heldout_src,
+             "reference_impl.py": ref_src, **shared},
+            threshold)
+        emit("mutation", mut)
+
+    # Per-function proof and negative-probe, then a per-function verdict.
+    per_function: dict[str, Classification] = {}
+    for spec in functions:
+        name = spec["function"]
+        signature = spec["signature"]
+        decorators = spec["decorators"]
+        must_reject = spec.get("negative_probe", {}).get("must_reject", [])
+        runtime = spec.get("enforcement", manifest.get("enforcement")) == "runtime"
+
+        if runtime:
+            crosshair = engine.CheckResult(
+                f"CHK-symbolic[{name}]", "crosshair", "unconfirmed",
+                detail=f"[{name}] not attempted: a runtime-enforced contract over rich "
+                       "types. Enforced on every call, not proven over all inputs.")
+        else:
+            crosshair = engine.run_crosshair(f"CHK-symbolic[{name}]", decorators,
+                                             impl_source, function=name, extra=shared,
+                                             sandbox_on=sandbox_on)
+        crosshair.detail = f"[{name}] {crosshair.detail}"
+        emit(f"crosshair[{name}]", crosshair)
+
+        if runtime:
+            probe = engine.run_negative_probe_runtime(
+                f"CHK-negprobe[{name}]", signature, decorators, must_reject, shown_src,
+                function=name, prelude=("from models import *\n" if models_src else ""),
+                deps=dict(shared), sandbox_on=sandbox_on)
+        else:
+            probe = engine.run_negative_probe(f"CHK-negprobe[{name}]", signature,
+                                              decorators, must_reject, function=name,
+                                              sandbox_on=sandbox_on)
+        probe.detail = f"[{name}] {probe.detail}"
+        emit(f"negative_probe[{name}]", probe)
+
+        per_function[name] = classify_function(
+            manifest["intent_id"], types=types, crosshair=crosshair, probe=probe,
+            shown=shown, heldout=heldout)
+
+    overall = classify_multi(manifest["intent_id"], per_function)
+
+    # Module-level shared checks fail once for the whole module. If one failed but no
+    # single function was individually blamed (e.g. a shape CrossHair could not refute,
+    # caught only by the property tests), surface it as FAILED rather than let a proven
+    # verdict stand on a module that does not type-check or agree with the oracle.
+    if overall.classification != FAILED:
+        for shared in (types, shown, heldout):
+            if shared.status == "fail":
+                overall = Classification(
+                    manifest["intent_id"], FAILED, shared.check_id,
+                    shared.counterexample or shared.detail,
+                    requires_human_code_review=True,
+                    failed_subtype="buggy-implementation",
+                    reasons=[f"module-wide {shared.kind} failed: "
+                             f"{shared.counterexample or shared.detail}"] + overall.reasons)
+                break
+
+    return results, overall

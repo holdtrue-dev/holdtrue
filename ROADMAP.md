@@ -21,6 +21,7 @@ Where holdtrue is and what comes next. Short and honest.
 
 - [x] `ENFORCED` tier: shapes CrossHair cannot prove (strings, lists, floats, loops) are reported as enforced at runtime, not proven. A `repeat` example demonstrates it
 - [x] Typed API layer with pydantic: rich models and constrained types, validated at the boundary and reported as `ENFORCED` (checkout, nights, pagination examples)
+- [x] Multi-function contracts: several functions proven in one module, each on its own, with a per-function verdict and the whole only as strong as its weakest part (dnd, chess, clock examples)
 - [ ] More provable shapes: simple stateful tests
 - [ ] A second language (TypeScript: fast-check, Stryker, tsc). No CrossHair there, so the `GUARANTEED` tier is narrower, and the report says so
 

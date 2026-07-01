@@ -101,7 +101,7 @@ def run_verification(
             "CHK-mutation", impl_source,
             {"test_shown.py": shown_src, "test_heldout.py": heldout_src,
              "reference_impl.py": ref_src, **shared},
-            threshold))
+            threshold, sandbox_on=sandbox_on))
 
     return results, classify(manifest["intent_id"], results)
 
@@ -161,7 +161,7 @@ def _run_multi(
             "CHK-mutation", impl_source,
             {"test_shown.py": shown_src, "test_heldout.py": heldout_src,
              "reference_impl.py": ref_src, **shared},
-            threshold)
+            threshold, sandbox_on=sandbox_on)
         emit("mutation", mut)
 
     # Per-function proof and negative-probe, then a per-function verdict.

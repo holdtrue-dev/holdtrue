@@ -76,9 +76,11 @@ This is what you review and approve. Not the code.
 - **many functions, one contract.** A contract can pin several functions at once, each verified on its own, with a per-function verdict and an overall result only as strong as its weakest part.
 - **never-silent revision.** When a contract fails its own self-check, `holdtrue` proposes a fix, refuses any change that weakens a check, waits for your approval, and records every change.
 - **any assistant.** Coding-agent CLIs or chat APIs, local or hosted, behind one `--provider` flag.
-- **sandboxed and reported.** Every check runs boxed in bubblewrap, and each run writes a JSON and Markdown report: the verdict, the deciding check, and what was and was not tested.
+- **sandboxed and reported.** Every check runs inside a bubblewrap sandbox on Linux, and holdtrue refuses to run AI-written code unsandboxed unless you pass `--no-sandbox`. Each run writes a JSON and Markdown report: the verdict, the deciding check, and what was and was not tested.
 
 ## getting started
+
+You need Python 3.12, [uv](https://docs.astral.sh/uv), and, for the sandbox, [bubblewrap](https://github.com/containers/bubblewrap) (Linux only). Without bwrap, pass `--no-sandbox` to run the checks directly on your machine.
 
 Clone it, sync, and run your first verification:
 
@@ -143,3 +145,11 @@ A verdict is only as trustworthy as the tools it rests on. Each of these does on
 | [![cosmic-ray](https://img.shields.io/badge/cosmic--ray-mutation-2bbf57?style=for-the-badge)](https://github.com/sixty-north/cosmic-ray) | Mutation testing. It breaks the code on purpose to confirm the tests would notice, so a green run is not false comfort. |
 | [![mypy](https://img.shields.io/badge/mypy-types-2bbf57?style=for-the-badge&logo=python&logoColor=white)](https://github.com/python/mypy) | Static typing. `mypy --strict` is the first gate: the implementation has to type-check before any other check runs. |
 | [![bubblewrap](https://img.shields.io/badge/bubblewrap-sandbox-2bbf57?style=for-the-badge)](https://github.com/containers/bubblewrap) | Unprivileged sandboxing. Every check runs code an AI just wrote, so it runs boxed, with no path to your files. |
+
+## security
+
+holdtrue runs AI-written code to verify it. The checks run inside a bubblewrap sandbox (no network, read-only system, writes confined to a scratch dir), and holdtrue fails closed: without bwrap it will not run that code unless you pass `--no-sandbox`. See [SECURITY.md](SECURITY.md) for the threat model, the sandbox scope, and its limits.
+
+## license
+
+Apache-2.0. See [LICENSE](LICENSE).

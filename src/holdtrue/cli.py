@@ -102,6 +102,23 @@ def _print_contract(manifest: dict) -> None:
         print(f"    {d}")
 
 
+def _sandbox_ok(args: argparse.Namespace) -> bool:
+    """Fail closed. holdtrue runs AI-written code, so it will not run it unsandboxed by
+    default: if bwrap is missing, refuse unless --no-sandbox is explicit. With
+    --no-sandbox, warn plainly that the code runs directly on the machine."""
+    if getattr(args, "no_sandbox", False):
+        print("  WARNING: --no-sandbox: AI-written code will run directly on this "
+              "machine, with no isolation.")
+        return True
+    if not engine.sandbox.bwrap_available():
+        print("  bubblewrap (bwrap) not found. holdtrue sandboxes the AI-written code "
+              "it runs and will not run it unsandboxed by default.\n"
+              "  Install bwrap (Linux only), or pass --no-sandbox to run directly on "
+              "this machine.")
+        return False
+    return True
+
+
 def _finish(project: Path, impl_label: str, manifest: dict, results: dict,
             cls, sb: bool) -> None:
     rep = report.build_report(manifest, impl_label, results, cls,
@@ -121,6 +138,8 @@ def _finish(project: Path, impl_label: str, manifest: dict, results: dict,
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
+    if not _sandbox_ok(args):
+        return 1
     project = Path(args.project).resolve()
     manifest = verify.load_manifest(project, args.manifest)
     sb = not args.no_sandbox
@@ -157,6 +176,8 @@ def cmd_implement(args: argparse.Namespace) -> int:
     if args.no_verify:
         print(f"  implementation: {impl_path}\n")
         return 0
+    if not _sandbox_ok(args):
+        return 1
     sb = not args.no_sandbox
     if args.no_mutation:
         print("  (mutation skipped)")
@@ -186,18 +207,19 @@ def cmd_author(args: argparse.Namespace) -> int:
     print("-" * 72)
     print(f"  intent_id : {manifest.get('intent_id')}")
     print(f"  summary   : {manifest.get('summary')}")
-    print(f"  signature : {manifest.get('signature')}")
     print("  contract (must hold):")
-    for d in manifest.get("checks", {}).get("crosshair", {}).get("decorators", []):
-        print(f"    {d}")
+    _print_contract(manifest)
     print("-" * 72)
     ref = project / "contract_private" / "reference_impl.py"
     if args.no_check or not ref.exists():
         print("  (self-check skipped)\n")
         return 0
+    if not _sandbox_ok(args):
+        return 1
     print("  self-check: does the author's own reference oracle satisfy the contract?")
     _, cls = verify.run_verification(project, ref, manifest,
-                                     sandbox_on=False, mutation=False, on_result=_on_result)
+                                     sandbox_on=not args.no_sandbox, mutation=False,
+                                     on_result=_on_result)
     ok = cls.classification in (GUARANTEED, ENFORCED)
     print("-" * 72)
     if ok:
@@ -211,6 +233,8 @@ def cmd_author(args: argparse.Namespace) -> int:
 
 
 def cmd_tui(args: argparse.Namespace) -> int:
+    if not _sandbox_ok(args):
+        return 1
     project = Path(args.project).resolve()
     manifest = verify.load_manifest(project, args.manifest)
     try:
@@ -284,6 +308,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     project = Path(args.project).resolve()
     if not (project / "intent" / "intent.md").exists():
         print("no intent/intent.md in the project.")
+        return 1
+    if not _sandbox_ok(args):
         return 1
     sb = not args.no_sandbox
 
@@ -363,6 +389,8 @@ def cmd_providers(args: argparse.Namespace) -> int:
 
 
 def cmd_studio(args: argparse.Namespace) -> int:
+    if not _sandbox_ok(args):
+        return 1
     try:
         from . import studio
     except ModuleNotFoundError:
@@ -409,6 +437,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="a contract bundle to use as a format example")
     au.add_argument("--no-check", action="store_true",
                     help="skip the reference-oracle self-check")
+    au.add_argument("--no-sandbox", action="store_true",
+                    help="run the self-check unsandboxed (runs code directly)")
     au.add_argument("--provider", help="which LLM provider to use (default: claude)")
     au.set_defaults(func=cmd_author)
 

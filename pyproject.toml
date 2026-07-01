@@ -3,8 +3,24 @@ name = "holdtrue"
 version = "0.1.0"
 description = "Review the guarantee, not the code. A contract-first verification harness."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [
-    { name = "Holdtrue", email = "holdtrue-dev@proton.me" }
+    { name = "holdtrue", email = "holdtrue-dev@proton.me" }
+]
+keywords = [
+    "verification", "formal-verification", "design-by-contract", "contracts",
+    "symbolic-execution", "property-based-testing", "mutation-testing",
+    "llm", "ai", "code-generation", "sandbox",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
 ]
 requires-python = ">=3.12"
 dependencies = [
@@ -12,14 +28,16 @@ dependencies = [
     "crosshair-tool>=0.0.107",
     "deal>=4.24.6",
     "hypothesis>=6.155.7",
-    "jsonschema>=4.26.0",
     "mypy>=2.1.0",
     "pydantic>=2.13.4",
-    "pyright>=1.1.411",
     "pytest>=9.1.1",
     "pyyaml>=6.0.3",
     "textual>=8.2.7",
 ]
+
+[project.urls]
+Homepage = "https://holdtrue-dev.github.io"
+Repository = "https://github.com/holdtrue-dev/holdtrue"
 
 [project.scripts]
 holdtrue = "holdtrue.cli:main"

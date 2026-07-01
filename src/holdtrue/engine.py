@@ -278,7 +278,15 @@ def run_negative_probe_runtime(check_id: str, signature: str, decorators: list[s
 # Mutation testing: mutates the implementation
 # --------------------------------------------------------------------------- #
 def run_mutation(check_id: str, impl_source: str, test_files: dict[str, str],
-                 threshold: float, *, timeout: float = 300.0) -> CheckResult:
+                 threshold: float, *, sandbox_on: bool = True,
+                 timeout: float = 300.0) -> CheckResult:
+    # cosmic-ray imports the module (init) and runs mutated copies of it (exec), so
+    # both touch LLM-written code and must be sandboxed. Fail closed rather than run
+    # mutants on the host when sandboxing was asked for but is unavailable.
+    if sandbox_on and not sandbox.bwrap_available():
+        return CheckResult(check_id, "mutation", "na",
+                           detail="skipped: sandboxing requested but bubblewrap is "
+                                  "missing, and mutation runs untrusted code.")
     work = tempfile.mkdtemp(prefix="holdtrue_mut_")
     try:
         wp = Path(work)
@@ -298,14 +306,20 @@ def run_mutation(check_id: str, impl_source: str, test_files: dict[str, str],
             'name = "local"\n',
             encoding="utf-8",
         )
-        # cosmic-ray spawns its own pytest subprocesses; run it tracked (not in bwrap)
-        # so it can be aborted as a whole group.
+        # cosmic-ray spawns its own pytest subprocesses, so run it tracked (via
+        # popen_run) rather than through sandbox.run, so the whole group stays
+        # killable. When sandboxing, wrap the two steps that touch untrusted code
+        # (init imports the module, exec runs the mutants) in bwrap; cr-report only
+        # reads the results db, so it needs no sandbox.
+        def maybe_box(cmd: list[str]) -> list[str]:
+            return sandbox.wrap(cmd, rw_dirs=[work], workdir=work) if sandbox_on else cmd
+
         rc_init, _, err_init = sandbox.popen_run(
-            [COSMIC_RAY, "init", "cr.toml", "cr.sqlite"], cwd=work, timeout=60)
+            maybe_box([COSMIC_RAY, "init", "cr.toml", "cr.sqlite"]), cwd=work, timeout=60)
         if rc_init != 0:
             return CheckResult(check_id, "mutation", "na",
                                detail=f"cosmic-ray init failed: {err_init[:200]}")
-        sandbox.popen_run([COSMIC_RAY, "exec", "cr.toml", "cr.sqlite"],
+        sandbox.popen_run(maybe_box([COSMIC_RAY, "exec", "cr.toml", "cr.sqlite"]),
                           cwd=work, timeout=timeout)
         _, rep_out, _ = sandbox.popen_run([CR_REPORT, "cr.sqlite"], cwd=work, timeout=60)
         total, surviving = _parse_cr_report(rep_out)

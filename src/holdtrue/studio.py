@@ -403,16 +403,29 @@ class RunScreen(Screen):
             return f"**{name}** `{tail}`"
         return _md_escape(line)
 
-    def _show_contract(self, signature: str, decorators: list[str]) -> None:
+    def _show_contract(self, manifest: dict) -> None:
         self.query_one("#output", RichLog).styles.display = "none"
-        block = "\n".join([signature, *decorators])
+        # one function, or several under `functions:`; either way show each signature
+        # with the conditions that must hold for it.
+        if "functions" in manifest:
+            groups = [(f["signature"],
+                       f.get("decorators")
+                       or f.get("checks", {}).get("crosshair", {}).get("decorators", []))
+                      for f in manifest["functions"]]
+        else:
+            groups = [(manifest.get("signature", ""),
+                       manifest.get("checks", {}).get("crosshair", {}).get("decorators", []))]
+        block, lines = [], ["[#cdddd2]the contract you are approving[/]", ""]
+        for sig, decos in groups:
+            block += [sig, *decos, ""]
+            lines.append(f"[#7fd6a0]{sig}[/]")
+            lines += [f"[#33ff66]{d}[/]" for d in decos]
+            lines.append("")
         self._detail["approve"] = ("The implementer sees only this. You approve it before "
-                                   "anything is written.\n\n```python\n" + block + "\n```\n")
-        lines = ["[#cdddd2]the contract you are approving[/]", "",
-                 f"[#7fd6a0]{signature}[/]"]
-        lines += [f"[#33ff66]{d}[/]" for d in decorators]
+                                   "anything is written.\n\n```python\n"
+                                   + "\n".join(block).strip() + "\n```\n")
         c = self.query_one("#contract", Static)
-        c.update("\n".join(lines))
+        c.update("\n".join(lines).rstrip())
         c.styles.display = "block"
 
     def _set_detail(self, stage: str, md: str) -> None:
@@ -653,8 +666,7 @@ class RunScreen(Screen):
                 return  # verdict already set, or quit
             manifest = revised
 
-            decos = manifest.get("checks", {}).get("crosshair", {}).get("decorators", [])
-            self._safe(self._show_contract, manifest.get("signature", ""), decos)
+            self._safe(self._show_contract, manifest)
             self._safe(self._stage, "approve", "waiting", "your call (press a)")
             self._safe(self._ask, "accept contract & start implementation?")
             if self._await_gate() != "approve":

@@ -12,33 +12,33 @@ Site: https://holdtrue-dev.github.io
 
 ## how it works
 
-One intent, end to end:
+`holdtrue` splits one job across two AI contexts that never meet, with you in the middle. You say what you want. The first context turns that into a contract you read and approve. The second, behind a curtain, writes code from the contract alone. `holdtrue` then checks the code against the contract and hands you a verdict with the evidence to back it.
 
-1. **intent** (you): what the code should do, in plain language.
-2. **contract author** (AI, context A): drafts the contract from your intent.
-3. **the contract** (you): you read it and approve. this, not the code.
-4. **the curtain**: the implementer sees only the contract, not your intent, not the held-out tests, not the reference oracle.
-5. **implementer** (AI, context B): writes the code from the contract alone.
-6. **verify** (holdtrue, sandboxed): types, proof, properties, negative-probe, mutation.
-7. **the verdict** (you): guaranteed, enforced, unguaranteed, or failed, with evidence.
+1. **the intent**: you say what the code should do, in plain language.
+2. **contract author**: AI drafts a machine-checkable contract from your intent.
+3. **the contract**: you read it and approve. This, not the code, is what you sign off on.
+4. **the curtain**: the implementer never sees your intent, the held-out tests, or the reference oracle. Only the contract crosses.
+5. **implementer**: AI writes the code from the contract alone.
+6. **verify**: `holdtrue` checks it in a sandbox with types, proof, properties, a negative-probe, and mutation.
+7. **the verdict**: `holdtrue` gives the final call, always with the evidence.
 
 ![holdtrue architecture](assets/architecture.gif)
 
-The two AI contexts run on an assistant you choose: a coding-agent CLI (`claude`, `aider`, `gemini`, `codex`), a chat API (Anthropic, OpenAI, Ollama), or your own command via `HOLDTRUE_AGENT_CMD`. `holdtrue providers` lists what is usable; `--provider` picks one. Any assistant, any model: the proof is the same.
+Both contexts run on whatever assistant you choose: a coding-agent CLI ([`claude`](https://github.com/anthropics/claude-code), [`aider`](https://github.com/Aider-AI/aider), [`gemini`](https://github.com/google-gemini/gemini-cli), [`codex`](https://github.com/openai/codex)), a chat API ([Anthropic](https://www.anthropic.com), [OpenAI](https://openai.com), [Ollama](https://ollama.com)), or your own command through `HOLDTRUE_AGENT_CMD`. Run `holdtrue providers` to see what is usable and pick one with `--provider`. The assistant and the model do not change the result. The proof is the same either way.
 
 ## the intent
 
-Plain language in. Here is the whole intent for the `clamp` example:
+Everything starts with a sentence. Here is the entire intent for the `clamp` example:
 
 > #### intent: clamp
 >
 > Clamp a number into a range. Given `x`, `lo`, `hi`, return `x` if it sits inside `[lo, hi]`, otherwise return the nearest bound.
 
-You write this. The rest is proof.
+That is all you write. Everything after it is proof.
 
 ## the contract
 
-The author turns that intent into a machine-checkable contract. Every line, in plain words:
+The author turns that sentence into something a machine can check. You read it once, in plain words, before anyone writes code:
 
 ```python
 @deal.pre(lambda x, lo, hi: lo <= hi)
@@ -48,26 +48,39 @@ The author turns that intent into a machine-checkable contract. Every line, in p
 def clamp(x: int, lo: int, hi: int) -> int: ...
 ```
 
-- **precondition** (`@deal.pre`): only promised for a valid range.
+- **precondition** (`@deal.pre`): the promise holds only for a valid range.
 - **in range** (`@deal.ensure`): the result lands inside `[lo, hi]`.
-- **exact value** (`@deal.ensure`): it equals the clamped number, not just some value in range.
+- **exact value** (`@deal.ensure`): it equals the clamped number, not just something in range.
 - **no surprises** (`@deal.raises()`): it raises nothing.
-- **signature**: the name and types the implementer must match.
+- **signature**: the name and types the implementer has to match.
 
-This, not the code, is what you read and approve.
+This is what you review and approve. Not the code.
 
 ## the verdict
 
-No answer without evidence. holdtrue reports, per intent, one of:
+`holdtrue` never answers without evidence. Every intent comes back as exactly one verdict:
 
-- `GUARANTEED`: proven over all inputs, and the contract catches injected bugs and rejects broken stand-ins.
-- `ENFORCED`: checked at runtime on every call and clean over every sample, but not proven over all inputs. This is the honest tier for shapes CrossHair cannot exhaust (strings, lists, floats, loops): a violating input raises instead of passing silently.
-- `UNGUARANTEED`: only sampled evidence. Still needs human review.
-- `FAILED`: a counterexample, with the input that breaks it.
+- 🟢 `GUARANTEED`: proven over every input, and the contract is strong enough to catch injected bugs and reject broken stand-ins.
+- 🔵 `ENFORCED`: checked at runtime on every call and clean over every sampled input, but not proven for all of them. This is the honest tier for shapes a prover cannot exhaust, like strings, lists, floats, and loops. A violating input raises instead of slipping through.
+- 🟡 `UNGUARANTEED`: only sampled evidence so far, so it still needs your eyes.
+- 🔴 `FAILED`: a concrete counterexample, with the exact input that breaks it.
+
+## features
+
+- **sealed contexts.** The author and the implementer share no memory. The curtain is the filesystem, not a promise: the implementer's workspace holds the contract and nothing else.
+- **you approve the contract, not the diff.** What you sign off on is a short, checkable spec, not a wall of code.
+- **a real proof tier.** For pure integer code, CrossHair walks every path and proves the contract for all inputs, not a sample.
+- **an honest fallback.** Rich types cannot be proven, so they are enforced at runtime and differential-tested against a held-out oracle, then reported as 🔵 `ENFORCED`. Never dressed up as proof.
+- **a non-vacuous check.** A negative-probe confirms the contract actually rejects broken implementations, so a pass means something.
+- **type and mutation gates.** `mypy --strict` guards the types; cosmic-ray mutates the code to check the tests would notice a bug.
+- **many functions, one contract.** A contract can pin several functions at once, each verified on its own, with a per-function verdict and an overall result only as strong as its weakest part.
+- **never-silent revision.** When a contract fails its own self-check, `holdtrue` proposes a fix, refuses any change that weakens a check, waits for your approval, and records every change.
+- **any assistant.** Coding-agent CLIs or chat APIs, local or hosted, behind one `--provider` flag.
+- **sandboxed and reported.** Every check runs boxed in bubblewrap, and each run writes a JSON and Markdown report: the verdict, the deciding check, and what was and was not tested.
 
 ## getting started
 
-Clone, sync, verify:
+Clone it, sync, and run your first verification:
 
 ```bash
 git clone https://github.com/holdtrue-dev/holdtrue
@@ -77,49 +90,56 @@ source .venv/bin/activate
 holdtrue verify examples/clamp --impl examples/clamp/controls/correct.py
 ```
 
-Swap in `controls/buggy.py` for a `FAILED`. Point at `examples/checkout` for a realistic `ENFORCED`: a pydantic shopping-cart total CrossHair cannot prove, but the contract enforces it on every call (`examples/nights` and `examples/pagination` are the same idea over dates and page maths). Or add `--manifest contract/manifest_weak.yaml` to watch a correct function get refused a guarantee because the contract itself is too weak.
+That prints 🟢 `GUARANTEED` with its evidence. Swap in `controls/buggy.py` to watch it come back 🔴 `FAILED` with the input that breaks it, or add `--manifest contract/manifest_weak.yaml` to see a correct function refused a guarantee because the contract itself is too weak.
 
 ## see it run
 
-Watch a verification stream live in a TUI:
+You can also watch it run, from a single check to the full loop:
 
 ```bash
+# stream one verification live
 holdtrue tui examples/clamp --impl examples/clamp/controls/correct.py
-```
 
-Drive the whole loop in a TUI: pick a provider and model, type an intent, approve the contract, watch it run to a verdict:
-
-```bash
+# drive the full loop in a TUI: pick a provider, type an intent,
+# approve the contract, watch it run to a verdict
 holdtrue studio
-```
 
-Or run the loop from the command line (author, self-check, approve, implement, verify):
-
-```bash
+# run the same loop from the command line
 holdtrue run examples/clamp --yes
 ```
 
-## many functions, one contract
+## examples
 
-A contract can pin more than one function. `examples/dnd` is a Dungeons and Dragons character sheet in four functions:
+Every example ships an intent, a contract, a private reference oracle with held-out tests, and correct and buggy controls. Point `holdtrue verify` at any of them.
+
+| example | what it shows | verdict |
+| --- | --- | --- |
+| `clamp`, `abs`, `square`, `repeat` | the basics, one function each | 🟢 `GUARANTEED` |
+| `dnd`, `chess`, `clock` | several proven functions in one contract | 🟢 `GUARANTEED` |
+| `checkout`, `nights`, `pagination` | pydantic models, dates, page maths | 🔵 `ENFORCED` |
+| `scheduler`, `poker`, `semver` | rich multi-function domains: intervals, cards, versions | 🔵 `ENFORCED` |
+| `billing` | proven money helpers beside enforced document functions | 🟢🔵 mixed |
+| `clamp` with `contract/manifest_weak.yaml` | a correct function, a contract too weak to earn a guarantee | 🟡 `UNGUARANTEED` |
+| any `controls/buggy.py` | a bug caught with its counterexample | 🔴 `FAILED` |
 
 ```bash
-holdtrue verify examples/dnd --impl examples/dnd/controls/correct.py
+# proven money helpers next to enforced pydantic functions, in one report
+holdtrue verify examples/billing --impl examples/billing/controls/correct.py
+
+# several functions over intervals, verified together
+holdtrue verify examples/scheduler --impl examples/scheduler/controls/correct.py
 ```
-
-`ability_modifier` and `proficiency_bonus` are the building blocks; `spell_save_dc` and `attack_bonus` are built from them. Each function is proven on its own, so the verdict is reported per function and the whole is only as strong as its weakest part. All four come back `GUARANTEED`. Swap in `controls/buggy.py` and the verdict is `FAILED`, naming the one function that broke and the input that breaks it, while the other three still read `GUARANTEED`. `examples/chess` (board geometry) and `examples/clock` (wall-clock maths) are the same idea.
-
-The bigger examples work over rich types, so they land at `ENFORCED`, the honest tier for shapes CrossHair cannot exhaust:
-
-- `examples/scheduler`: meeting-room availability over intervals (overlaps, intersect, merge, free slots, earliest bookable slot).
-- `examples/poker`: five-card hand ranking and comparison over card enums.
-- `examples/semver`: version-constraint resolution (compare, satisfies, max satisfying).
-- `examples/billing`: an invoice engine that is **mixed**. The two pure-integer money helpers (`apply_rate`, `nonneg`) are proven `GUARANTEED`; the two document-level functions over pydantic types (`line_total`, `settle`) are `ENFORCED`. One report, both tiers, per function. Its buggy control breaks the proven `apply_rate`, and CrossHair catches it with a concrete counterexample even though it is the enforced functions above it that call it.
-
-## never-silent revision
-
-When verification shows the contract was wrong, holdtrue does not go silent. A self-check failure proposes a fix back to you; a second author cross-checks for an axis the contract misses (`holdtrue cross-check`); a run that cannot pass is diagnosed. A ratchet forbids weakening a check to pass, every change waits for your approval, and each one is recorded in `<project>/revisions/`.
 
 ## powered by
 
-deal (contracts) · CrossHair (proof) · cosmic-ray (mutation) · mypy (types) · bubblewrap (sandbox)
+A verdict is only as trustworthy as the tools it rests on. Each of these does one job:
+
+| | why it is here |
+| --- | --- |
+| [![deal](https://img.shields.io/badge/deal-contracts-2bbf57?style=for-the-badge)](https://github.com/life4/deal) | Design-by-contract for Python. The contract is written in it (`@deal.pre`, `@deal.ensure`, `@deal.raises`), so this is the spec you approve. |
+| [![CrossHair](https://img.shields.io/badge/CrossHair-proof-2bbf57?style=for-the-badge)](https://github.com/pschanely/CrossHair) | Symbolic execution. It walks every path to prove a contract holds for all inputs, which is what earns the 🟢 `GUARANTEED` tier. |
+| [![Hypothesis](https://img.shields.io/badge/Hypothesis-properties-2bbf57?style=for-the-badge)](https://github.com/HypothesisWorks/hypothesis) | Property-based testing. It generates the shown and held-out samples, including the differential test against the private reference oracle. |
+| [![pydantic](https://img.shields.io/badge/pydantic-rich%20types-2bbf57?style=for-the-badge&logo=pydantic&logoColor=white)](https://github.com/pydantic/pydantic) | Runtime validation for rich types. It enforces the model bounds on every call, which is what makes 🔵 `ENFORCED` an honest tier and not a guess. |
+| [![cosmic-ray](https://img.shields.io/badge/cosmic--ray-mutation-2bbf57?style=for-the-badge)](https://github.com/sixty-north/cosmic-ray) | Mutation testing. It breaks the code on purpose to confirm the tests would notice, so a green run is not false comfort. |
+| [![mypy](https://img.shields.io/badge/mypy-types-2bbf57?style=for-the-badge&logo=python&logoColor=white)](https://github.com/python/mypy) | Static typing. `mypy --strict` is the first gate: the implementation has to type-check before any other check runs. |
+| [![bubblewrap](https://img.shields.io/badge/bubblewrap-sandbox-2bbf57?style=for-the-badge)](https://github.com/containers/bubblewrap) | Unprivileged sandboxing. Every check runs code an AI just wrote, so it runs boxed, with no path to your files. |

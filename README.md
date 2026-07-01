@@ -1,4 +1,4 @@
-![holdtrue: prove it, don't read it.](assets/banner.png)
+![holdtrue: prove it, don't read it.](assets/banner.gif)
 
 [![ci](https://github.com/holdtrue-dev/holdtrue/actions/workflows/ci.yml/badge.svg)](https://github.com/holdtrue-dev/holdtrue/actions/workflows/ci.yml)
 ![python 3.12](https://img.shields.io/badge/python-3.12-2bbf57)
@@ -6,7 +6,7 @@
 
 **prove it. don't read it.**
 
-AI writes the code. You approve a contract. holdtrue proves it holds.
+AI writes the code. **You** approve a contract. `holdtrue` proves it holds.
 
 Site: https://holdtrue-dev.github.io
 
@@ -15,10 +15,10 @@ Site: https://holdtrue-dev.github.io
 One intent, end to end:
 
 1. **intent** (you): what the code should do, in plain language.
-2. **contract author** (ai, context A): drafts the contract from your intent.
+2. **contract author** (AI, context A): drafts the contract from your intent.
 3. **the contract** (you): you read it and approve. this, not the code.
 4. **the curtain**: the implementer sees only the contract, not your intent, not the held-out tests, not the reference oracle.
-5. **implementer** (ai, context B): writes the code from the contract alone.
+5. **implementer** (AI, context B): writes the code from the contract alone.
 6. **verify** (holdtrue, sandboxed): types, proof, properties, negative-probe, mutation.
 7. **the verdict** (you): guaranteed, enforced, unguaranteed, or failed, with evidence.
 
@@ -30,7 +30,7 @@ The two AI contexts run on an assistant you choose: a coding-agent CLI (`claude`
 
 Plain language in. Here is the whole intent for the `clamp` example:
 
-> # intent: clamp
+> #### intent: clamp
 >
 > Clamp a number into a range. Given `x`, `lo`, `hi`, return `x` if it sits inside `[lo, hi]`, otherwise return the nearest bound.
 
@@ -69,7 +69,7 @@ No answer without evidence. holdtrue reports, per intent, one of:
 
 Clone, sync, verify:
 
-```
+```bash
 git clone https://github.com/holdtrue-dev/holdtrue
 cd holdtrue && uv sync
 source .venv/bin/activate
@@ -83,19 +83,19 @@ Swap in `controls/buggy.py` for a `FAILED`. Point at `examples/checkout` for a r
 
 Watch a verification stream live in a TUI:
 
-```
+```bash
 holdtrue tui examples/clamp --impl examples/clamp/controls/correct.py
 ```
 
 Drive the whole loop in a TUI: pick a provider and model, type an intent, approve the contract, watch it run to a verdict:
 
-```
+```bash
 holdtrue studio
 ```
 
 Or run the loop from the command line (author, self-check, approve, implement, verify):
 
-```
+```bash
 holdtrue run examples/clamp --yes
 ```
 
@@ -103,7 +103,7 @@ holdtrue run examples/clamp --yes
 
 A contract can pin more than one function. `examples/dnd` is a Dungeons and Dragons character sheet in four functions:
 
-```
+```bash
 holdtrue verify examples/dnd --impl examples/dnd/controls/correct.py
 ```
 

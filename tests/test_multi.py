@@ -49,6 +49,20 @@ def test_buggy_is_failed_and_names_the_function(example: str, broken: str) -> No
     assert any("GUARANTEED" in r for r in cls.reasons)
 
 
+def test_normalize_accepts_both_decorator_shapes() -> None:
+    # nested (mirrors the single-function schema, and what the author writes) and flat
+    # both normalise to a flat `decorators` key, so neither shape crashes downstream.
+    from holdtrue.verify import _normalize_manifest
+    nested = _normalize_manifest({"functions": [
+        {"function": "f", "signature": "f(x: int) -> int",
+         "checks": {"crosshair": {"decorators": ["@deal.raises()"]}}}]})
+    flat = _normalize_manifest({"functions": [
+        {"function": "f", "signature": "f(x: int) -> int",
+         "decorators": ["@deal.raises()"]}]})
+    assert nested["functions"][0]["decorators"] == ["@deal.raises()"]
+    assert flat["functions"][0]["decorators"] == ["@deal.raises()"]
+
+
 def test_report_renders_all_signatures() -> None:
     m, results, cls = _verify("dnd", "correct.py")
     rep = build_report(m, "correct.py", results, cls, sandboxed=False)

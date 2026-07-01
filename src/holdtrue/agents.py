@@ -103,6 +103,28 @@ Two kinds of contract, pick by the intent:
   Aim for ENFORCED. If the worked example has a contract/models.py, read it and
   mirror its style.
 
+MANY FUNCTIONS: if the intent describes several functions, do NOT force them into one.
+Drop the top-level `signature`/`function`/`checks.crosshair` and instead list them
+under a top-level `functions:` key. Each entry mirrors the single-function shape:
+
+  functions:
+    - function: <func_a>
+      signature: "<func_a>(<typed args>) -> <type>"
+      checks:
+        crosshair:
+          decorators:
+            - "@deal.ensure(lambda <args>, result: <postcondition>)"
+            - "@deal.raises()"
+      negative_probe:
+        must_reject: ["<wrong one-line body>", ...]
+    - function: <func_b>
+      ...
+
+Keep the shared `hypothesis_shown`, `hypothesis_heldout`, and `mutation` under the
+top-level `checks:`. Both test files import EVERY function from `core` (the held-out
+one also imports each from `reference_impl`), and reference_impl.py defines every
+function. Each function is proven on its own and the overall verdict is the weakest.
+
 Hard rules:
 - No IO, no globals, no prints, no unbounded loops in the contract conditions.
 - The postcondition MUST pin the EXACT result (result == <formula>), not just a
@@ -136,7 +158,8 @@ def _impl_spec(manifest: dict) -> dict:
             "summary": manifest.get("summary"),
             "functions": [
                 {"signature": f["signature"], "function": f["function"],
-                 "must_hold": f["decorators"]}
+                 "must_hold": f.get("decorators")
+                 or f.get("checks", {}).get("crosshair", {}).get("decorators", [])}
                 for f in manifest["functions"]
             ],
         }

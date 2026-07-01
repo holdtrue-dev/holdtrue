@@ -18,7 +18,19 @@ def load_manifest(project: Path, manifest_rel: str) -> dict:
     p = Path(manifest_rel)
     if not p.is_absolute():
         p = project / manifest_rel
-    return yaml.safe_load(p.read_text(encoding="utf-8"))
+    return _normalize_manifest(yaml.safe_load(p.read_text(encoding="utf-8")))
+
+
+def _normalize_manifest(manifest: dict) -> dict:
+    """Accept either shape for a per-function contract's decorators: flat on the
+    function entry (`decorators: [...]`) or nested under `checks.crosshair.decorators`,
+    which mirrors the single-function schema and is what the author naturally writes.
+    Normalise to a flat `decorators` key so the rest of the code reads one shape."""
+    for spec in manifest.get("functions") or []:
+        if "decorators" not in spec:
+            spec["decorators"] = (spec.get("checks", {}).get("crosshair", {})
+                                  .get("decorators", []))
+    return manifest
 
 
 def run_verification(
@@ -157,7 +169,11 @@ def _run_multi(
     for spec in functions:
         name = spec["function"]
         signature = spec["signature"]
-        decorators = spec["decorators"]
+        decorators = spec.get("decorators", [])
+        if not decorators:
+            raise ValueError(
+                f"function {name!r} has no contract decorators; expected them under "
+                "checks.crosshair.decorators (or a flat decorators: list)")
         must_reject = spec.get("negative_probe", {}).get("must_reject", [])
         runtime = spec.get("enforcement", manifest.get("enforcement")) == "runtime"
 

@@ -7,10 +7,14 @@ summary: "chessboard square maths: index, light-square, king distance, knight mo
 functions:
   - function: square_index
     signature: "square_index(file: int, rank: int) -> int"
-    decorators:
-      - "@deal.pre(lambda file, rank: 0 <= file <= 7 and 0 <= rank <= 7)"
-      - "@deal.ensure(lambda file, rank, result: result == rank * 8 + file)"
-      - "@deal.raises()"
+    summary: "rank-major index 0..63 of a square: rank * 8 + file."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.pre(lambda file, rank: 0 <= file <= 7 and 0 <= rank <= 7)"
+          - "@deal.ensure(lambda file, rank, result: result == rank * 8 + file)"
+          - "@deal.raises()"
+        guarantee_if_exhausted: GUARANTEED
     negative_probe:
       must_reject:
         - "return 0"
@@ -20,10 +24,14 @@ functions:
 
   - function: is_light_square
     signature: "is_light_square(file: int, rank: int) -> bool"
-    decorators:
-      - "@deal.pre(lambda file, rank: 0 <= file <= 7 and 0 <= rank <= 7)"
-      - "@deal.ensure(lambda file, rank, result: result == ((file + rank) % 2 == 1))"
-      - "@deal.raises()"
+    summary: "a square is light when file + rank is odd (a1 is dark)."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.pre(lambda file, rank: 0 <= file <= 7 and 0 <= rank <= 7)"
+          - "@deal.ensure(lambda file, rank, result: result == ((file + rank) % 2 == 1))"
+          - "@deal.raises()"
+        guarantee_if_exhausted: GUARANTEED
     negative_probe:
       must_reject:
         - "return True"
@@ -32,10 +40,14 @@ functions:
 
   - function: king_distance
     signature: "king_distance(f1: int, r1: int, f2: int, r2: int) -> int"
-    decorators:
-      - "@deal.pre(lambda f1, r1, f2, r2: 0 <= f1 <= 7 and 0 <= r1 <= 7 and 0 <= f2 <= 7 and 0 <= r2 <= 7)"
-      - "@deal.ensure(lambda f1, r1, f2, r2, result: result == max(abs(f1 - f2), abs(r1 - r2)))"
-      - "@deal.raises()"
+    summary: "fewest king moves: max(abs(f1 - f2), abs(r1 - r2)), the Chebyshev distance."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.pre(lambda f1, r1, f2, r2: 0 <= f1 <= 7 and 0 <= r1 <= 7 and 0 <= f2 <= 7 and 0 <= r2 <= 7)"
+          - "@deal.ensure(lambda f1, r1, f2, r2, result: result == max(abs(f1 - f2), abs(r1 - r2)))"
+          - "@deal.raises()"
+        guarantee_if_exhausted: GUARANTEED
     negative_probe:
       must_reject:
         - "return 0"
@@ -45,10 +57,14 @@ functions:
 
   - function: is_knight_move
     signature: "is_knight_move(f1: int, r1: int, f2: int, r2: int) -> bool"
-    decorators:
-      - "@deal.pre(lambda f1, r1, f2, r2: 0 <= f1 <= 7 and 0 <= r1 <= 7 and 0 <= f2 <= 7 and 0 <= r2 <= 7)"
-      - "@deal.ensure(lambda f1, r1, f2, r2, result: result == ((abs(f1 - f2) == 1 and abs(r1 - r2) == 2) or (abs(f1 - f2) == 2 and abs(r1 - r2) == 1)))"
-      - "@deal.raises()"
+    summary: "one knight move connects the squares: the two gaps are 1 and 2 in some order."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.pre(lambda f1, r1, f2, r2: 0 <= f1 <= 7 and 0 <= r1 <= 7 and 0 <= f2 <= 7 and 0 <= r2 <= 7)"
+          - "@deal.ensure(lambda f1, r1, f2, r2, result: result == ((abs(f1 - f2) == 1 and abs(r1 - r2) == 2) or (abs(f1 - f2) == 2 and abs(r1 - r2) == 1)))"
+          - "@deal.raises()"
+        guarantee_if_exhausted: GUARANTEED
     negative_probe:
       must_reject:
         - "return True"

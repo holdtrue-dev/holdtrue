@@ -4,16 +4,21 @@ version: 1
 intent_id: INT-006
 summary: "the core D&D 5e character numbers: ability modifier, proficiency bonus, spell save DC, attack bonus."
 
-# Each function is spliced with its own decorators and proven over its own domain.
-# The overall verdict is the weakest function's verdict, so GUARANTEED means every
-# function was proven exhaustively.
+# Each entry mirrors the single-function schema. Its decorators are spliced onto that
+# function alone and proven over its own domain, so a weak spot in one function cannot
+# borrow another's proof. The overall verdict is the weakest function's verdict, so
+# GUARANTEED means every function was proven exhaustively.
 functions:
   - function: ability_modifier
     signature: "ability_modifier(score: int) -> int"
-    decorators:
-      - "@deal.pre(lambda score: 1 <= score <= 30)"
-      - "@deal.ensure(lambda score, result: result == (score - 10) // 2)"
-      - "@deal.raises()"
+    summary: "the ability modifier for a score 1..30: floor((score - 10) / 2)."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.pre(lambda score: 1 <= score <= 30)"
+          - "@deal.ensure(lambda score, result: result == (score - 10) // 2)"
+          - "@deal.raises()"
+        guarantee_if_exhausted: GUARANTEED
     negative_probe:
       must_reject:
         - "return 0"
@@ -23,10 +28,14 @@ functions:
 
   - function: proficiency_bonus
     signature: "proficiency_bonus(level: int) -> int"
-    decorators:
-      - "@deal.pre(lambda level: 1 <= level <= 20)"
-      - "@deal.ensure(lambda level, result: result == 2 + (level - 1) // 4)"
-      - "@deal.raises()"
+    summary: "the proficiency bonus for a level 1..20: 2 + (level - 1) // 4."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.pre(lambda level: 1 <= level <= 20)"
+          - "@deal.ensure(lambda level, result: result == 2 + (level - 1) // 4)"
+          - "@deal.raises()"
+        guarantee_if_exhausted: GUARANTEED
     negative_probe:
       must_reject:
         - "return 2"
@@ -36,10 +45,14 @@ functions:
 
   - function: spell_save_dc
     signature: "spell_save_dc(score: int, level: int) -> int"
-    decorators:
-      - "@deal.pre(lambda score, level: 1 <= score <= 30 and 1 <= level <= 20)"
-      - "@deal.ensure(lambda score, level, result: result == 8 + (2 + (level - 1) // 4) + ((score - 10) // 2))"
-      - "@deal.raises()"
+    summary: "the spell save DC: 8 + proficiency bonus + ability modifier."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.pre(lambda score, level: 1 <= score <= 30 and 1 <= level <= 20)"
+          - "@deal.ensure(lambda score, level, result: result == 8 + (2 + (level - 1) // 4) + ((score - 10) // 2))"
+          - "@deal.raises()"
+        guarantee_if_exhausted: GUARANTEED
     negative_probe:
       must_reject:
         - "return 8"
@@ -48,10 +61,14 @@ functions:
 
   - function: attack_bonus
     signature: "attack_bonus(score: int, level: int, proficient: bool) -> int"
-    decorators:
-      - "@deal.pre(lambda score, level, proficient: 1 <= score <= 30 and 1 <= level <= 20)"
-      - "@deal.ensure(lambda score, level, proficient, result: result == (score - 10) // 2 + ((2 + (level - 1) // 4) if proficient else 0))"
-      - "@deal.raises()"
+    summary: "the attack bonus: ability modifier, plus the proficiency bonus when proficient."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.pre(lambda score, level, proficient: 1 <= score <= 30 and 1 <= level <= 20)"
+          - "@deal.ensure(lambda score, level, proficient, result: result == (score - 10) // 2 + ((2 + (level - 1) // 4) if proficient else 0))"
+          - "@deal.raises()"
+        guarantee_if_exhausted: GUARANTEED
     negative_probe:
       must_reject:
         - "return 0"

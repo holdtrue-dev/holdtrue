@@ -7,10 +7,14 @@ summary: "wall-clock second maths on a 24h day: to-seconds, add (wrapping), is-a
 functions:
   - function: to_seconds
     signature: "to_seconds(h: int, m: int, s: int) -> int"
-    decorators:
-      - "@deal.pre(lambda h, m, s: 0 <= h <= 23 and 0 <= m <= 59 and 0 <= s <= 59)"
-      - "@deal.ensure(lambda h, m, s, result: result == h * 3600 + m * 60 + s)"
-      - "@deal.raises()"
+    summary: "seconds since midnight for a valid clock reading: h*3600 + m*60 + s."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.pre(lambda h, m, s: 0 <= h <= 23 and 0 <= m <= 59 and 0 <= s <= 59)"
+          - "@deal.ensure(lambda h, m, s, result: result == h * 3600 + m * 60 + s)"
+          - "@deal.raises()"
+        guarantee_if_exhausted: GUARANTEED
     negative_probe:
       must_reject:
         - "return 0"
@@ -20,11 +24,15 @@ functions:
 
   - function: add_seconds
     signature: "add_seconds(sec: int, delta: int) -> int"
-    decorators:
-      - "@deal.pre(lambda sec, delta: 0 <= sec <= 86399 and -86400 <= delta <= 86400)"
-      - "@deal.ensure(lambda sec, delta, result: result == (sec + delta) % 86400)"
-      - "@deal.ensure(lambda sec, delta, result: 0 <= result <= 86399)"
-      - "@deal.raises()"
+    summary: "a time of day plus a (possibly negative) delta, wrapped into 0..86399."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.pre(lambda sec, delta: 0 <= sec <= 86399 and -86400 <= delta <= 86400)"
+          - "@deal.ensure(lambda sec, delta, result: result == (sec + delta) % 86400)"
+          - "@deal.ensure(lambda sec, delta, result: 0 <= result <= 86399)"
+          - "@deal.raises()"
+        guarantee_if_exhausted: GUARANTEED
     negative_probe:
       must_reject:
         - "return sec"
@@ -34,10 +42,14 @@ functions:
 
   - function: is_am
     signature: "is_am(sec: int) -> bool"
-    decorators:
-      - "@deal.pre(lambda sec: 0 <= sec <= 86399)"
-      - "@deal.ensure(lambda sec, result: result == (sec < 43200))"
-      - "@deal.raises()"
+    summary: "true when a time of day is before noon: sec < 43200."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.pre(lambda sec: 0 <= sec <= 86399)"
+          - "@deal.ensure(lambda sec, result: result == (sec < 43200))"
+          - "@deal.raises()"
+        guarantee_if_exhausted: GUARANTEED
     negative_probe:
       must_reject:
         - "return True"
@@ -47,10 +59,14 @@ functions:
 
   - function: minutes_between
     signature: "minutes_between(a: int, b: int) -> int"
-    decorators:
-      - "@deal.pre(lambda a, b: 0 <= a <= 86399 and 0 <= b <= 86399)"
-      - "@deal.ensure(lambda a, b, result: result == ((b - a) % 86400) // 60)"
-      - "@deal.raises()"
+    summary: "whole minutes forward from a to b, wrapping past midnight: ((b - a) % 86400) // 60."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.pre(lambda a, b: 0 <= a <= 86399 and 0 <= b <= 86399)"
+          - "@deal.ensure(lambda a, b, result: result == ((b - a) % 86400) // 60)"
+          - "@deal.raises()"
+        guarantee_if_exhausted: GUARANTEED
     negative_probe:
       must_reject:
         - "return 0"

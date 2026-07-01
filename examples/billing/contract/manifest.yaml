@@ -1,0 +1,92 @@
+# holdtrue contract manifest. The human-reviewed source of truth.
+# A MIXED multi-function contract. Two pure-integer money helpers are proven outright
+# (GUARANTEED); two document-level functions over pydantic types are enforced at
+# runtime (ENFORCED). The overall verdict is the weakest, so ENFORCED, and the report
+# shows both tiers side by side.
+version: 1
+intent_id: INT-010
+summary: "invoice billing in cents: apply_rate + nonneg (proven) and line_total + settle (enforced)."
+models: "models.py"
+
+functions:
+  # --- proven: pure integer arithmetic, no models --- #
+  - function: apply_rate
+    signature: "apply_rate(amount_cents: int, bps: int) -> int"
+    summary: "a basis-point rate of an amount, rounded half up: (amount * bps + 5000) // 10000."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.pre(lambda amount_cents, bps: amount_cents >= 0 and 0 <= bps <= 10000)"
+          - "@deal.ensure(lambda amount_cents, bps, result: result == (amount_cents * bps + 5000) // 10000)"
+          - "@deal.raises()"
+        guarantee_if_exhausted: GUARANTEED
+    negative_probe:
+      must_reject:
+        - "return 0"
+        - "return amount_cents * bps // 10000"
+        - "return amount_cents * bps + 5000"
+
+  - function: nonneg
+    signature: "nonneg(cents: int) -> int"
+    summary: "a money amount floored at zero: max(cents, 0)."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.ensure(lambda cents, result: result == max(cents, 0))"
+          - "@deal.raises()"
+        guarantee_if_exhausted: GUARANTEED
+    negative_probe:
+      must_reject:
+        - "return cents"
+        - "return 0"
+        - "return abs(cents)"
+
+  # --- enforced: over pydantic types CrossHair cannot reason about --- #
+  - function: line_total
+    signature: "line_total(item: LineItem) -> int"
+    enforcement: runtime
+    summary: "quantity times unit price, minus the per-line discount, never below zero."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.ensure(lambda item, result: result == item.qty * item.unit_price_cents - (item.qty * item.unit_price_cents * item.discount_bps + 5000) // 10000)"
+          - "@deal.ensure(lambda item, result: result >= 0)"
+          - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return 0"
+        - "return item.qty * item.unit_price_cents"
+        - "return item.qty * item.unit_price_cents - item.discount_bps"
+
+  - function: settle
+    signature: "settle(invoice: Invoice) -> Receipt"
+    enforcement: runtime
+    summary: "receipt with subtotal (line totals), tax (rate on subtotal), and total (subtotal + tax - coupon, floored)."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.ensure(lambda invoice, result: result.subtotal_cents == sum(line_total(i) for i in invoice.items))"
+          - "@deal.ensure(lambda invoice, result: result.tax_cents == apply_rate(result.subtotal_cents, invoice.tax_bps))"
+          - "@deal.ensure(lambda invoice, result: result.total_cents == max(result.subtotal_cents + result.tax_cents - invoice.coupon_cents, 0))"
+          - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return Receipt(subtotal_cents=0, tax_cents=0, total_cents=0)"
+        - "return Receipt(subtotal_cents=sum(line_total(i) for i in invoice.items), tax_cents=0, total_cents=sum(line_total(i) for i in invoice.items))"
+        - "return Receipt(subtotal_cents=sum(line_total(i) for i in invoice.items), tax_cents=apply_rate(sum(line_total(i) for i in invoice.items), invoice.tax_bps), total_cents=sum(line_total(i) for i in invoice.items))"
+
+interrogated_axes:
+  - apply_rate is a half-up rounded basis-point rate (proven over all inputs)
+  - nonneg floors a money amount at zero (proven over all inputs)
+  - line_total is gross minus the discount, never negative
+  - settle pins subtotal, tax, and total, with the total floored at zero
+  - each function raises nothing on valid input
+
+checks:
+  hypothesis_shown: "tests_shown/test_billing.py"
+  hypothesis_heldout: "tests_heldout/test_billing_heldout.py"
+  mutation:
+    threshold: 0.85
+
+acceptance:
+  target_class: ENFORCED

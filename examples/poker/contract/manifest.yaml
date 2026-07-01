@@ -1,0 +1,90 @@
+# holdtrue contract manifest. The human-reviewed source of truth.
+# A multi-function, rich-type contract over enums and lists of cards. CrossHair cannot
+# reason over these, so every function is enforced at runtime. The contracts pin the
+# flush/straight relationships and the shape of compare; the held-out oracle pins the
+# full category logic and the tie-break ordering.
+version: 1
+intent_id: INT-011
+summary: "five-card poker: is_flush, is_straight, hand_category, and compare."
+models: "models.py"
+enforcement: runtime
+
+functions:
+  - function: is_flush
+    signature: "is_flush(cards: list[Card]) -> bool"
+    summary: "true when all five cards share a suit."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.pre(lambda cards: len(cards) == 5)"
+          - "@deal.ensure(lambda cards, result: result == (len({c.suit for c in cards}) == 1))"
+          - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return True"
+        - "return len({c.suit for c in cards}) != 1"
+        - "return len({c.suit for c in cards}) == 2"
+
+  - function: is_straight
+    signature: "is_straight(cards: list[Card]) -> bool"
+    summary: "true when the five ranks are five in a row (ace high only)."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.pre(lambda cards: len(cards) == 5)"
+          - "@deal.ensure(lambda cards, result: result == (len({int(c.rank) for c in cards}) == 5 and max(int(c.rank) for c in cards) - min(int(c.rank) for c in cards) == 4))"
+          - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return True"
+        - "return len({int(c.rank) for c in cards}) == 5"
+        - "return max(int(c.rank) for c in cards) - min(int(c.rank) for c in cards) <= 4"
+
+  - function: hand_category
+    signature: "hand_category(cards: list[Card]) -> Category"
+    summary: "the best category the hand makes; a flush is a flush, a straight is a straight."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.pre(lambda cards: len(cards) == 5)"
+          - "@deal.ensure(lambda cards, result: is_flush(cards) == (result in (Category.FLUSH, Category.STRAIGHT_FLUSH)))"
+          - "@deal.ensure(lambda cards, result: is_straight(cards) == (result in (Category.STRAIGHT, Category.STRAIGHT_FLUSH)))"
+          - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return Category.FLUSH"
+        - "return Category.STRAIGHT"
+        - "return Category.STRAIGHT_FLUSH"
+
+  - function: compare
+    signature: "compare(a: list[Card], b: list[Card]) -> int"
+    summary: "1 if a beats b, -1 if b beats a, 0 on a tie; category first, then ranks."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.pre(lambda a, b: len(a) == 5 and len(b) == 5)"
+          - "@deal.ensure(lambda a, b, result: result in (-1, 0, 1))"
+          - "@deal.ensure(lambda a, b, result: hand_category(a) == hand_category(b) or result == ((hand_category(a) > hand_category(b)) - (hand_category(a) < hand_category(b))))"
+          - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return 2"
+        - "return 1"
+        - "return -1"
+
+interrogated_axes:
+  - is_flush is exactly one suit across the five cards
+  - is_straight is five distinct ranks spanning exactly four (ace high only)
+  - hand_category agrees with is_flush and is_straight on the flush and straight categories
+  - compare returns -1/0/1 and matches the category order when categories differ
+  - the full category logic and the tie-break ordering are pinned by the held-out oracle
+  - each function raises nothing on a valid five-card hand
+
+checks:
+  hypothesis_shown: "tests_shown/test_poker.py"
+  hypothesis_heldout: "tests_heldout/test_poker_heldout.py"
+  mutation:
+    threshold: 0.85
+
+acceptance:
+  target_class: ENFORCED

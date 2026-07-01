@@ -1,0 +1,105 @@
+# holdtrue contract manifest. The human-reviewed source of truth.
+# A multi-function, rich-type contract over a shared pydantic Interval. CrossHair
+# cannot reason over pydantic, so every function is enforced at runtime, not proven;
+# the deal contracts fire on every call and the held-out oracle pins the parts a
+# single lambda cannot state (merge coverage, free-slot completeness, earliest fit).
+version: 1
+intent_id: INT-009
+summary: "meeting-room availability: overlaps, intersect, merge, free_slots, earliest_slot over intervals."
+models: "models.py"
+enforcement: runtime
+
+functions:
+  - function: overlaps
+    signature: "overlaps(a: Interval, b: Interval) -> bool"
+    summary: "true when two intervals share a minute (touching endpoints do not count)."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.ensure(lambda a, b, result: result == (a.start < b.end and b.start < a.end))"
+          - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return False"
+        - "return True"
+        - "return a.start < b.start"
+
+  - function: intersect
+    signature: "intersect(a: Interval, b: Interval) -> Interval | None"
+    summary: "the shared interval, or None when they do not overlap."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.ensure(lambda a, b, result: (result is None) == (not (a.start < b.end and b.start < a.end)))"
+          - "@deal.ensure(lambda a, b, result: result is None or (result.start == max(a.start, b.start) and result.end == min(a.end, b.end)))"
+          - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return None"
+        - "return a"
+        - "return Interval(start=min(a.start, b.start), end=max(a.end, b.end))"
+
+  - function: merge
+    signature: "merge(items: list[Interval]) -> list[Interval]"
+    summary: "overlapping or touching intervals combined, sorted and disjoint."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.ensure(lambda items, result: all(result[i].end < result[i + 1].start for i in range(len(result) - 1)))"
+          - "@deal.ensure(lambda items, result: all(any(o.start <= it.start and it.end <= o.end for o in result) for it in items))"
+          - "@deal.ensure(lambda items, result: all(any(it.start == o.start for it in items) and any(it.end == o.end for it in items) for o in result))"
+          - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return items"
+        - "return []"
+        - "return sorted(items, key=lambda x: x.start)"
+
+  - function: free_slots
+    signature: "free_slots(busy: list[Interval], window: Interval) -> list[Interval]"
+    summary: "the gaps inside the window that no busy interval covers, sorted and disjoint."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.ensure(lambda busy, window, result: all(window.start <= s.start and s.end <= window.end for s in result))"
+          - "@deal.ensure(lambda busy, window, result: all(result[i].end < result[i + 1].start for i in range(len(result) - 1)))"
+          - "@deal.ensure(lambda busy, window, result: all(not (s.start < b.end and b.start < s.end) for s in result for b in busy))"
+          - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return busy"
+        - "return [window]"
+        - "return sorted(busy, key=lambda x: x.start)"
+
+  - function: earliest_slot
+    signature: "earliest_slot(busy: list[Interval], window: Interval, duration: int) -> Interval | None"
+    summary: "the earliest interval of exactly duration that fits free inside the window, or None."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.pre(lambda busy, window, duration: duration > 0)"
+          - "@deal.ensure(lambda busy, window, duration, result: result is None or (result.end - result.start == duration and window.start <= result.start and result.end <= window.end and all(not (result.start < b.end and b.start < result.end) for b in busy)))"
+          - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return window"
+        - "return Interval(start=window.start, end=window.start + duration + 1)"
+        - "return busy[0] if busy else None"
+
+interrogated_axes:
+  - overlaps is strict (shared minute, not a touching endpoint)
+  - intersect is None exactly when disjoint, else the exact shared bounds
+  - merge output is sorted, disjoint, covers every input, boundaries come from inputs
+  - free_slots are inside the window, sorted, disjoint, and clear of every busy interval
+  - earliest_slot is a free interval of the exact duration inside the window, or None
+  - completeness (merge covers the union, free_slots leave no free minute, earliest is earliest) is pinned by the held-out oracle
+  - each function raises nothing on valid input
+
+checks:
+  hypothesis_shown: "tests_shown/test_scheduler.py"
+  hypothesis_heldout: "tests_heldout/test_scheduler_heldout.py"
+  mutation:
+    threshold: 0.85
+
+acceptance:
+  target_class: ENFORCED

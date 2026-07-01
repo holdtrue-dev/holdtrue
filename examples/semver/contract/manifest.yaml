@@ -1,0 +1,83 @@
+# holdtrue contract manifest. The human-reviewed source of truth.
+# A multi-function, rich-type contract over version and constraint models. CrossHair
+# cannot reason over pydantic, so every function is enforced at runtime; the contracts
+# pin each function exactly, and the held-out oracle is a second, independent check.
+version: 1
+intent_id: INT-012
+summary: "semver resolution: compare, satisfies, satisfies_all, max_satisfying."
+models: "models.py"
+enforcement: runtime
+
+functions:
+  - function: compare
+    signature: "compare(a: Version, b: Version) -> int"
+    summary: "-1/0/1 ordering by major, then minor, then patch."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.ensure(lambda a, b, result: result == (((a.major, a.minor, a.patch) > (b.major, b.minor, b.patch)) - ((a.major, a.minor, a.patch) < (b.major, b.minor, b.patch))))"
+          - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return 0"
+        - "return 1"
+        - "return a.major - b.major"
+
+  - function: satisfies
+    signature: "satisfies(v: Version, c: Constraint) -> bool"
+    summary: "whether a version meets a single constraint, per its operator."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.ensure(lambda v, c, result: result == (compare(v, c.version) == 0 if c.op == Op.EQ else compare(v, c.version) >= 0 if c.op == Op.GTE else compare(v, c.version) > 0 if c.op == Op.GT else compare(v, c.version) <= 0 if c.op == Op.LTE else compare(v, c.version) < 0 if c.op == Op.LT else (v.major == c.version.major and compare(v, c.version) >= 0) if c.op == Op.CARET else (v.major == c.version.major and v.minor == c.version.minor and compare(v, c.version) >= 0)))"
+          - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return True"
+        - "return False"
+        - "return compare(v, c.version) == 0"
+
+  - function: satisfies_all
+    signature: "satisfies_all(v: Version, constraints: list[Constraint]) -> bool"
+    summary: "whether a version meets every constraint (an empty set is met by anything)."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.ensure(lambda v, constraints, result: result == all(satisfies(v, c) for c in constraints))"
+          - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return True"
+        - "return False"
+        - "return any(satisfies(v, c) for c in constraints)"
+
+  - function: max_satisfying
+    signature: "max_satisfying(versions: list[Version], c: Constraint) -> Version | None"
+    summary: "the newest version in the list that meets the constraint, or None."
+    checks:
+      crosshair:
+        decorators:
+          - "@deal.ensure(lambda versions, c, result: (result is None) == (not any(satisfies(v, c) for v in versions)))"
+          - "@deal.ensure(lambda versions, c, result: result is None or (satisfies(result, c) and result in versions and all(compare(result, v) >= 0 for v in versions if satisfies(v, c))))"
+          - "@deal.raises()"
+    negative_probe:
+      must_reject:
+        - "return None"
+        - "return versions[0] if versions else None"
+        - "return max(versions, key=lambda v: (v.major, v.minor, v.patch)) if versions else None"
+
+interrogated_axes:
+  - compare orders versions by major, then minor, then patch
+  - satisfies applies each operator (==, >=, >, <=, <, caret, tilde) exactly
+  - satisfies_all is the conjunction of the constraints, vacuously true on an empty set
+  - max_satisfying is the greatest satisfying version in the list, or None
+  - each function raises nothing on valid input
+
+checks:
+  hypothesis_shown: "tests_shown/test_semver.py"
+  hypothesis_heldout: "tests_heldout/test_semver_heldout.py"
+  mutation:
+    threshold: 0.85
+
+acceptance:
+  target_class: ENFORCED

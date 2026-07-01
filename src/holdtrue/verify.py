@@ -193,7 +193,7 @@ def _run_multi(
             probe = engine.run_negative_probe_runtime(
                 f"CHK-negprobe[{name}]", signature, decorators, must_reject, shown_src,
                 function=name, prelude=("from models import *\n" if models_src else ""),
-                deps=dict(shared), sandbox_on=sandbox_on)
+                base_src=ref_src, deps=dict(shared), sandbox_on=sandbox_on)
         else:
             probe = engine.run_negative_probe(f"CHK-negprobe[{name}]", signature,
                                               decorators, must_reject, function=name,
@@ -208,19 +208,32 @@ def _run_multi(
     overall = classify_multi(manifest["intent_id"], per_function)
 
     # Module-level shared checks fail once for the whole module. If one failed but no
-    # single function was individually blamed (e.g. a shape CrossHair could not refute,
-    # caught only by the property tests), surface it as FAILED rather than let a proven
-    # verdict stand on a module that does not type-check or agree with the oracle.
+    # single function was individually blamed (a runtime-enforced shape CrossHair could
+    # not refute, caught only by the property tests), surface it as FAILED rather than
+    # let a verdict stand on a module that does not type-check or agree with the oracle.
+    # Attribute the failure to a function when the failing test names one, since a
+    # shared property test cannot self-attribute the way a per-function proof can.
     if overall.classification != FAILED:
         for shared in (types, shown, heldout):
             if shared.status == "fail":
+                text = f"{shared.detail or ''} {shared.counterexample or ''}"
+                # Longest name first, so test_satisfies_all is charged to satisfies_all,
+                # not to satisfies (whose test_ prefix is a substring of it).
+                culprit = next((spec["function"] for spec in
+                                sorted(functions, key=lambda s: len(s["function"]),
+                                       reverse=True)
+                                if f"test_{spec['function']}" in text), None)
+                evidence = shared.counterexample or shared.detail
+                reasons = ["module-wide " + shared.kind + " failed"
+                           + (f" (function {culprit!r})" if culprit else "")
+                           + f": {evidence}"]
+                reasons += [f"{n}: {c.classification}" for n, c in per_function.items()]
                 overall = Classification(
-                    manifest["intent_id"], FAILED, shared.check_id,
-                    shared.counterexample or shared.detail,
+                    manifest["intent_id"], FAILED,
+                    f"{culprit}::{shared.check_id}" if culprit else shared.check_id,
+                    (f"function {culprit!r}: " if culprit else "") + (evidence or ""),
                     requires_human_code_review=True,
-                    failed_subtype="buggy-implementation",
-                    reasons=[f"module-wide {shared.kind} failed: "
-                             f"{shared.counterexample or shared.detail}"] + overall.reasons)
+                    failed_subtype="buggy-implementation", reasons=reasons)
                 break
 
     return results, overall

@@ -57,7 +57,7 @@ def _splice(decorators: list[str], impl_source: str, function: str = "clamp") ->
         deco_nodes = [ast.parse(d[1:] if d.startswith("@") else d, mode="eval").body
                       for d in decorators]
         target.decorator_list = deco_nodes + target.decorator_list
-        mod.body.insert(0, ast.parse("import deal").body[0])
+        _insert_import_deal(mod)
         ast.fix_missing_locations(mod)
         return ast.unparse(mod)
     except Exception:
@@ -65,10 +65,49 @@ def _splice(decorators: list[str], impl_source: str, function: str = "clamp") ->
         return "import deal\n" + "\n".join(decorators) + "\n" + impl_source
 
 
+def _insert_import_deal(mod: ast.Module) -> None:
+    """Insert `import deal` after any module docstring and any `from __future__`
+    imports, both of which must stay first. Inserting at position 0 would push them
+    down and raise SyntaxError (`from __future__ imports must occur at the beginning`),
+    which silently breaks both the CrossHair proof and the runtime negative-probe."""
+    idx = 0
+    if (mod.body and isinstance(mod.body[0], ast.Expr)
+            and isinstance(mod.body[0].value, ast.Constant)
+            and isinstance(mod.body[0].value.value, str)):
+        idx = 1
+    while (idx < len(mod.body) and isinstance(mod.body[idx], ast.ImportFrom)
+           and mod.body[idx].module == "__future__"):
+        idx += 1
+    mod.body.insert(idx, ast.parse("import deal").body[0])
+
+
 def _body_to_function(signature: str, body: str) -> str:
     """Turn a negative-probe body like 'return lo' into a full typed function."""
     indented = "\n".join("    " + line for line in body.splitlines())
     return f"def {signature}:\n{indented}\n"
+
+
+def _probe_module(base_src: str, decorators: list[str], signature: str, body: str,
+                  function: str) -> str:
+    """Build a module that is `base_src` with `function` replaced by a one-line broken
+    body and the contract decorators spliced onto it.
+
+    The correct siblings from base_src stay, so a shared property test that imports and
+    calls every function in a multi-function contract still resolves. Only the broken
+    function is decorated, so only its contract fires; if its body actually satisfies
+    the contract, nothing raises and the probe correctly records a survivor.
+    """
+    mod = ast.parse(base_src)
+    mod.body = [n for n in mod.body
+                if not (isinstance(n, ast.FunctionDef) and n.name == function)]
+    broken = ast.parse(_body_to_function(signature, body)).body[0]
+    deco_nodes = [ast.parse(d[1:] if d.startswith("@") else d, mode="eval").body
+                  for d in decorators]
+    broken.decorator_list = deco_nodes  # type: ignore[attr-defined]
+    _insert_import_deal(mod)
+    mod.body.append(broken)
+    ast.fix_missing_locations(mod)
+    return ast.unparse(mod)
 
 
 # --------------------------------------------------------------------------- #
@@ -202,17 +241,26 @@ def run_negative_probe(check_id: str, signature: str, decorators: list[str],
 def run_negative_probe_runtime(check_id: str, signature: str, decorators: list[str],
                                must_reject: list[str], shown_src: str, *,
                                function: str = "clamp", prelude: str = "",
+                               base_src: str | None = None,
                                deps: dict[str, str] | None = None,
                                sandbox_on: bool = True) -> CheckResult:
     """The runtime counterpart of the negative-probe, for contracts CrossHair cannot
     reason over (pydantic models, rich types). Each broken body is spliced with the
     contract and run against the shown property: a strong contract makes the property
     FAIL (the deal postcondition raises, or the result disagrees). A body that passes
-    the property survived, so the contract is too weak over the sample."""
+    the property survived, so the contract is too weak over the sample.
+
+    In a multi-function contract the shared property test imports and calls every
+    function, so `base_src` (the reference module) supplies the correct siblings and
+    only `function` is replaced by the broken body. Without it, the broken body stands
+    alone (the single-function case)."""
     survivors = []
     for body in must_reject:
-        impl = prelude + _body_to_function(signature, body)
-        core = _splice(decorators, impl, function)
+        if base_src is not None:
+            core = _probe_module(base_src, decorators, signature, body, function)
+        else:
+            impl = prelude + _body_to_function(signature, body)
+            core = _splice(decorators, impl, function)
         r = run_pytest(f"{check_id}:{body}", "probe", shown_src, core, deps=deps,
                        sandbox_on=sandbox_on)
         if r.status != "fail":  # the property did not reject this broken body

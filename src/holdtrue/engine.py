@@ -8,7 +8,6 @@ Two things that are easy to get wrong:
 from __future__ import annotations
 
 import ast
-import os
 import re
 import shutil
 import sys

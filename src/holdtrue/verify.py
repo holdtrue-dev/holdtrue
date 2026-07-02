@@ -53,6 +53,9 @@ def run_verification(
     if "stateful" in manifest.get("checks", {}):
         return _run_stateful(project, impl_path, manifest, sandbox_on=sandbox_on,
                              mutation=mutation, parallel=parallel, on_result=on_result)
+    if manifest.get("language") == "typescript":
+        return _run_ts(project, impl_path, manifest, mutation=mutation,
+                       parallel=parallel, on_result=on_result)
     contract_dir = project / "contract"
     private_dir = project / "contract_private"
     impl_source = impl_path.read_text(encoding="utf-8")
@@ -406,6 +409,71 @@ def _run_stateful(
                 {"test_shown.py": shown_src, "test_heldout.py": heldout_src,
                  "test_stateful.py": stateful_src, "reference_impl.py": ref_src},
                 threshold, sandbox_on=sandbox_on))
+
+    _dispatch(tasks, emit, parallel=parallel)
+    return results, classify(manifest["intent_id"], results)
+
+
+def _run_ts(
+    project: Path,
+    impl_path: Path,
+    manifest: dict,
+    *,
+    mutation: bool,
+    parallel: bool,
+    on_result: Callable[[engine.CheckResult], None] | None,
+) -> tuple[dict[str, engine.CheckResult], Classification]:
+    """Verify a TypeScript contract.
+
+    TypeScript has no symbolic prover equivalent to CrossHair, so the verdict is
+    capped at ENFORCED.  The report says so explicitly.  Checks run outside the
+    bwrap sandbox (npm requires network access for initial package installation).
+    """
+    contract_dir = project / "contract"
+    private_dir = project / "contract_private"
+    impl_source = impl_path.read_text(encoding="utf-8")
+
+    checks = manifest["checks"]
+    shown_src = (contract_dir / checks["hypothesis_shown"]).read_text(encoding="utf-8")
+    heldout_src = (private_dir / checks["hypothesis_heldout"]).read_text(encoding="utf-8")
+    ref_src = (private_dir / "reference_impl.ts").read_text(encoding="utf-8")
+    threshold = checks.get("mutation", {}).get("threshold", 0.75)
+    must_reject = manifest.get("negative_probe", {}).get("must_reject", [])
+    impl_template = manifest.get("negative_probe", {}).get("impl_template", "")
+
+    results: dict[str, engine.CheckResult] = {}
+    _lock = threading.Lock()
+
+    def emit(r: engine.CheckResult) -> None:
+        with _lock:
+            results[r.kind] = r
+            if on_result:
+                on_result(r)
+
+    # TypeScript: CrossHair is unavailable; emit the static unconfirmed result now.
+    emit(engine.CheckResult(
+        "CHK-symbolic", "crosshair", "unconfirmed",
+        detail="not attempted: TypeScript has no symbolic prover. "
+               "GUARANTEED is not achievable; the maximum is ENFORCED."))
+
+    tasks: list[Callable[[], engine.CheckResult]] = [
+        lambda: engine.run_types_ts("CHK-types", impl_source),
+        lambda: engine.run_jest("CHK-prop-shown", "hypothesis_shown",
+                                shown_src, impl_source),
+        lambda: engine.run_jest("CHK-prop-heldout", "hypothesis_heldout",
+                                heldout_src, impl_source,
+                                extra_files={"reference_impl.ts": ref_src}),
+    ]
+
+    if must_reject and impl_template:
+        tasks.append(
+            lambda: engine.run_ts_probe("CHK-negprobe", must_reject,
+                                        shown_src, impl_template))
+
+    if mutation:
+        tasks.append(
+            lambda: engine.run_stryker("CHK-mutation", impl_source, shown_src,
+                                       threshold))
 
     _dispatch(tasks, emit, parallel=parallel)
     return results, classify(manifest["intent_id"], results)

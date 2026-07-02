@@ -1,0 +1,37 @@
+# holdtrue contract manifest. The human-reviewed source of truth.
+version: 1
+language: typescript
+intent_id: INT-TS-001
+summary: "clamp(x, lo, hi) returns x confined to [lo, hi]; requires lo <= hi."
+signature: "function clamp(x: number, lo: number, hi: number): number"
+function: clamp
+
+# TypeScript has no CrossHair equivalent. GUARANTEED is not achievable.
+# The highest possible verdict is ENFORCED (runtime-checked properties + clean types).
+interrogated_axes:
+  - range (lo <= result <= hi)
+  - boundary (x in range returns x)
+  - exact value (result === Math.min(Math.max(x, lo), hi))
+  - raises nothing (no-throw contract)
+
+checks:
+  hypothesis_shown: "tests_shown/test_clamp.test.ts"
+  hypothesis_heldout: "tests_heldout/test_clamp_heldout.test.ts"
+  mutation:
+    threshold: 0.75
+
+# impl_template is the TypeScript module template; {body} is replaced with each
+# broken return statement to test that the shown tests catch it.
+negative_probe:
+  must_reject:
+    - "return lo;"
+    - "return hi;"
+    - "return x;"
+    - "return lo + 1;"
+  impl_template: |
+    export function clamp(x: number, lo: number, hi: number): number {
+        {body}
+    }
+
+acceptance:
+  target_class: ENFORCED

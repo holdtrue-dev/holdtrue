@@ -8,8 +8,10 @@ Two things that are easy to get wrong:
 from __future__ import annotations
 
 import ast
+import json
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -388,3 +390,283 @@ def run_oracle_mutation(check_id: str, oracle_source: str, shown_src: str,
 
 def _tail(s: str, n: int) -> str:
     return "\n".join(s.splitlines()[-n:])
+
+
+# =========================================================================== #
+# TypeScript checks (tsc, jest + fast-check, Stryker)
+#
+# TypeScript has no symbolic prover equivalent to CrossHair; the GUARANTEED tier
+# is not achievable.  The highest possible verdict is ENFORCED (runtime-checked
+# by the fast-check properties, clean types, non-vacuous negative probe).
+#
+# TypeScript checks are NOT sandboxed by bwrap (they need npm's network cache
+# for initial package installation).  They run in isolated temp directories.
+# =========================================================================== #
+
+NODE = shutil.which("node")
+NPM = shutil.which("npm")
+
+# Packages required in the toolchain
+_TS_DEPS: dict[str, str] = {
+    "typescript": "^5.0.0",
+    "fast-check": "^3.23.0",
+    "jest": "^29.0.0",
+    "ts-jest": "~29.3.4",
+    "@types/jest": "^29.5.0",
+    "@stryker-mutator/core": "^7.0.0",
+    "@stryker-mutator/jest-runner": "^7.0.0",
+    "@stryker-mutator/typescript-checker": "^7.0.0",
+}
+
+_TSCONFIG = json.dumps({
+    "compilerOptions": {
+        "strict": True,
+        "noEmit": True,
+        "target": "ES2020",
+        "module": "CommonJS",
+        "moduleResolution": "node",
+        "esModuleInterop": True,
+    },
+})
+
+_JEST_CONFIG = """\
+const config = {
+  preset: 'ts-jest',
+  testEnvironment: 'node',
+  testMatch: ['**/*.test.ts'],
+  globals: { 'ts-jest': { diagnostics: false } },
+};
+module.exports = config;
+"""
+
+
+def ts_available() -> bool:
+    return NODE is not None and NPM is not None
+
+
+def ts_toolchain() -> Path:
+    """Return the TypeScript toolchain dir, installing packages on first call."""
+    toolchain = Path.home() / ".holdtrue" / "ts-toolchain"
+    marker = toolchain / "node_modules" / ".holdtrue-installed"
+    if marker.exists():
+        return toolchain
+    toolchain.mkdir(parents=True, exist_ok=True)
+    pkg = {
+        "name": "holdtrue-ts-toolchain",
+        "version": "1.0.0",
+        "private": True,
+        "devDependencies": _TS_DEPS,
+    }
+    (toolchain / "package.json").write_text(json.dumps(pkg, indent=2), encoding="utf-8")
+    r = subprocess.run([NPM or "npm", "install", "--prefer-offline", "--no-audit",
+                        "--no-fund", "--loglevel=error"],
+                       cwd=str(toolchain), capture_output=True, text=True, timeout=300)
+    if r.returncode != 0:
+        raise RuntimeError(
+            f"npm install for TypeScript toolchain failed:\n{r.stderr[:400]}")
+    marker.write_text("ok", encoding="utf-8")
+    return toolchain
+
+
+def _ts_work(work: Path, toolchain: Path) -> None:
+    """Symlink node_modules and write tsconfig + jest.config into the work dir."""
+    nm = work / "node_modules"
+    if not nm.exists():
+        nm.symlink_to(toolchain / "node_modules")
+    (work / "tsconfig.json").write_text(_TSCONFIG, encoding="utf-8")
+    (work / "jest.config.js").write_text(_JEST_CONFIG, encoding="utf-8")
+
+
+def _run_node(cmd: list[str], *, cwd: str, timeout: float) -> tuple[int, str, str]:
+    if _aborted_ts():
+        return 130, "", "[holdtrue] aborted"
+    r = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, timeout=timeout)
+    return r.returncode, r.stdout or "", r.stderr or ""
+
+
+def _aborted_ts() -> bool:
+    try:
+        from . import sandbox as _sb
+        return _sb.aborted()
+    except Exception:
+        return False
+
+
+# --------------------------------------------------------------------------- #
+# TypeScript: type check
+# --------------------------------------------------------------------------- #
+def run_types_ts(check_id: str, impl_source: str, *,
+                 timeout: float = 60.0) -> CheckResult:
+    if not ts_available():
+        return CheckResult(check_id, "types", "na",
+                           detail="node/npm not found; TypeScript type check skipped.")
+    work = Path(tempfile.mkdtemp(prefix="holdtrue_ts_ty_"))
+    try:
+        toolchain = ts_toolchain()
+        _ts_work(work, toolchain)
+        (work / "core.ts").write_text(impl_source, encoding="utf-8")
+        tsc = str(toolchain / "node_modules" / ".bin" / "tsc")
+        rc, out, err = _run_node([tsc, "--noEmit", "--strict",
+                                   "--moduleResolution", "node",
+                                   "--esModuleInterop", "core.ts"],
+                                  cwd=str(work), timeout=timeout)
+        if rc == 0:
+            return CheckResult(check_id, "types", "pass", detail="tsc --strict clean.")
+        return CheckResult(check_id, "types", "fail",
+                           detail=(out + err).strip()[:300])
+    finally:
+        nm = work / "node_modules"
+        if nm.is_symlink():
+            nm.unlink()
+        shutil.rmtree(work, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------- #
+# TypeScript: jest + fast-check property tests
+# --------------------------------------------------------------------------- #
+def run_jest(check_id: str, kind_label: str, test_source: str, impl_source: str,
+             *, extra_files: dict[str, str] | None = None,
+             timeout: float = 120.0) -> CheckResult:
+    if not ts_available():
+        return CheckResult(check_id, kind_label, "na",
+                           detail="node/npm not found; TypeScript property test skipped.")
+    work = Path(tempfile.mkdtemp(prefix="holdtrue_ts_pt_"))
+    try:
+        toolchain = ts_toolchain()
+        _ts_work(work, toolchain)
+        (work / "core.ts").write_text(impl_source, encoding="utf-8")
+        (work / "test_check.test.ts").write_text(test_source, encoding="utf-8")
+        for name, src in (extra_files or {}).items():
+            (work / name).write_text(src, encoding="utf-8")
+        jest = str(toolchain / "node_modules" / ".bin" / "jest")
+        rc, out, err = _run_node([jest, "--no-coverage", "--forceExit"],
+                                  cwd=str(work), timeout=timeout)
+        if rc == 0:
+            return CheckResult(check_id, kind_label, "pass",
+                               detail="property holds over sampled inputs (not a proof).")
+        combined = out + err
+        cex = _parse_jest_failure(combined)
+        return CheckResult(check_id, kind_label, "fail",
+                           detail=_tail(combined, 12), counterexample=cex)
+    finally:
+        nm = work / "node_modules"
+        if nm.is_symlink():
+            nm.unlink()
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _parse_jest_failure(output: str) -> str | None:
+    for line in output.splitlines():
+        if "Counterexample" in line or "counterexample" in line:
+            return line.strip()
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# TypeScript: negative probe (run broken implementations against shown tests)
+# --------------------------------------------------------------------------- #
+def run_ts_probe(check_id: str, must_reject: list[str], test_source: str,
+                 impl_template: str, *, timeout: float = 60.0) -> CheckResult:
+    """Check that each broken body is caught by the shown tests.
+
+    `impl_template` must contain the placeholder `{body}` which is replaced
+    with the broken body text.  A broken body that PASSES the tests is a survivor:
+    the shown tests are too weak to catch that kind of bug.
+    """
+    survivors = []
+    for body in must_reject:
+        broken = impl_template.replace("{body}", body)
+        r = run_jest(f"{check_id}:{body}", "probe", test_source, broken, timeout=timeout)
+        if r.status != "fail":
+            survivors.append({"body": body, "result": r.status})
+    if survivors:
+        return CheckResult(check_id, "negative_probe", "fail",
+                           detail=f"contract failed to reject {len(survivors)} broken "
+                                  "implementation(s)",
+                           extra={"survivors": survivors})
+    return CheckResult(check_id, "negative_probe", "pass",
+                       detail=f"contract rejects all {len(must_reject)} broken bodies.")
+
+
+# --------------------------------------------------------------------------- #
+# TypeScript: Stryker mutation testing
+# --------------------------------------------------------------------------- #
+def run_stryker(check_id: str, impl_source: str, test_source: str,
+                threshold: float, *, timeout: float = 300.0) -> CheckResult:
+    if not ts_available():
+        return CheckResult(check_id, "mutation", "na",
+                           detail="node/npm not found; TypeScript mutation skipped.")
+    work = Path(tempfile.mkdtemp(prefix="holdtrue_ts_mut_"))
+    try:
+        toolchain = ts_toolchain()
+        _ts_work(work, toolchain)
+        (work / "core.ts").write_text(impl_source, encoding="utf-8")
+        (work / "test_check.test.ts").write_text(test_source, encoding="utf-8")
+        stryker_cfg = {
+            "mutate": ["core.ts"],
+            "testRunner": "jest",
+            "checkers": ["typescript"],
+            "tsconfigFile": "tsconfig.json",
+            "reporters": ["clear-text", "json"],
+            "jsonReporter": {"fileName": "stryker-report.json"},
+            "thresholds": {"high": 80, "low": 60, "break": 0},
+            "tempDirName": str(work / "stryker-tmp"),
+            "logLevel": "error",
+            "jest": {
+                "config": {"testEnvironment": "node",
+                           "preset": "ts-jest",
+                           "globals": {"ts-jest": {"diagnostics": False}}},
+                "projectType": "custom",
+            },
+        }
+        (work / "stryker.config.json").write_text(
+            json.dumps(stryker_cfg, indent=2), encoding="utf-8")
+        stryker = str(toolchain / "node_modules" / ".bin" / "stryker")
+        rc, out, err = _run_node([stryker, "run"],
+                                  cwd=str(work), timeout=timeout)
+        report_path = work / "stryker-report.json"
+        if report_path.exists():
+            total, killed = _parse_stryker_report(
+                json.loads(report_path.read_text(encoding="utf-8")))
+        else:
+            combined = out + err
+            total, killed = _parse_stryker_text(combined)
+        if total == 0:
+            return CheckResult(check_id, "mutation", "na",
+                               detail="no mutable nodes found by Stryker.",
+                               extra={"total": 0})
+        score = killed / total
+        status = "pass" if score >= threshold else "fail"
+        surviving = total - killed
+        return CheckResult(check_id, "mutation", status,
+                           detail=f"mutation score {score:.3f} "
+                                  f"({killed}/{total} killed, {surviving} survived; "
+                                  f"threshold {threshold}).",
+                           extra={"total": total, "killed": killed,
+                                  "surviving": surviving, "score": round(score, 4),
+                                  "threshold": threshold})
+    finally:
+        nm = work / "node_modules"
+        if nm.is_symlink():
+            nm.unlink()
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _parse_stryker_report(report: dict) -> tuple[int, int]:
+    files = report.get("files", {})
+    total = killed = 0
+    for file_data in files.values():
+        for m in file_data.get("mutants", []):
+            total += 1
+            if m.get("status") == "Killed":
+                killed += 1
+    return total, killed
+
+
+def _parse_stryker_text(out: str) -> tuple[int, int]:
+    total = killed = 0
+    for line in out.splitlines():
+        m = re.search(r"(\d+) of (\d+) mutants killed", line)
+        if m:
+            killed, total = int(m.group(1)), int(m.group(2))
+    return total, killed

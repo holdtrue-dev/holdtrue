@@ -148,9 +148,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
     print("-" * 72)
     if args.no_mutation:
         print("  (mutation skipped)")
+    if getattr(args, "oracle_mutation", False):
+        print("  (oracle mutation cross-check enabled)")
     results, cls = verify.run_verification(
         project, Path(args.impl).resolve(), manifest,
-        sandbox_on=sb, mutation=not args.no_mutation, on_result=_on_result)
+        sandbox_on=sb, mutation=not args.no_mutation,
+        oracle_mutation=getattr(args, "oracle_mutation", False),
+        on_result=_on_result)
     _finish(project, Path(args.impl).name, manifest, results, cls, sb)
     return 0
 
@@ -186,6 +190,7 @@ def cmd_implement(args: argparse.Namespace) -> int:
         sandbox_on=sb, mutation=not args.no_mutation, on_result=_on_result)
     _finish(project, "implementer (llm)", manifest, results, cls, sb)
     return 0
+
 
 
 def cmd_author(args: argparse.Namespace) -> int:
@@ -418,6 +423,8 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("--manifest", default="contract/manifest.yaml")
     v.add_argument("--no-sandbox", action="store_true", help="run unsandboxed")
     v.add_argument("--no-mutation", action="store_true", help="skip mutation testing")
+    v.add_argument("--oracle-mutation", action="store_true",
+                   help="also mutate the reference oracle (cross-check test-suite strength)")
     v.set_defaults(func=cmd_verify)
 
     im = sub.add_parser("implement",

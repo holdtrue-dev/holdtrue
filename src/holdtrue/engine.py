@@ -354,5 +354,24 @@ def _parse_cr_report(out: str) -> tuple[int, int]:
     return total, surviving
 
 
+def run_oracle_mutation(check_id: str, oracle_source: str, shown_src: str,
+                         heldout_src: str, threshold: float, *,
+                         sandbox_on: bool = True,
+                         timeout: float = 300.0) -> CheckResult:
+    """Mutate the reference oracle and check whether the test suite catches it.
+
+    Uses the same mutation infrastructure as run_mutation but with the oracle as
+    the target module. The held-out differential test compares the mutated oracle
+    against the unmodified oracle (both copies supplied): a mutation that changes
+    the oracle's behaviour will be caught by the differential comparison, giving
+    an honest measure of how much the test suite distinguishes correct from broken
+    oracle implementations."""
+    return run_mutation(
+        check_id, oracle_source,
+        {"test_shown.py": shown_src, "test_heldout.py": heldout_src,
+         "reference_impl.py": oracle_source},
+        threshold, sandbox_on=sandbox_on, timeout=timeout)
+
+
 def _tail(s: str, n: int) -> str:
     return "\n".join(s.splitlines()[-n:])

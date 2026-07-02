@@ -4,6 +4,8 @@ Shared by the CLI and the tests so both exercise the same path.
 """
 from __future__ import annotations
 
+import concurrent.futures
+import threading
 from pathlib import Path
 from typing import Callable
 
@@ -40,11 +42,14 @@ def run_verification(
     *,
     sandbox_on: bool = True,
     mutation: bool = True,
+    oracle_mutation: bool = False,
+    parallel: bool = True,
     on_result: Callable[[engine.CheckResult], None] | None = None,
 ) -> tuple[dict[str, engine.CheckResult], Classification]:
     if "functions" in manifest:
         return _run_multi(project, impl_path, manifest, sandbox_on=sandbox_on,
-                          mutation=mutation, on_result=on_result)
+                          mutation=mutation, oracle_mutation=oracle_mutation,
+                          parallel=parallel, on_result=on_result)
     contract_dir = project / "contract"
     private_dir = project / "contract_private"
     impl_source = impl_path.read_text(encoding="utf-8")
@@ -68,42 +73,85 @@ def run_verification(
     runtime = manifest.get("enforcement") == "runtime"
 
     results: dict[str, engine.CheckResult] = {}
+    _lock = threading.Lock()
 
     def emit(r: engine.CheckResult) -> None:
-        results[r.kind] = r
-        if on_result:
-            on_result(r)
+        with _lock:
+            results[r.kind] = r
+            if on_result:
+                on_result(r)
 
-    emit(engine.run_types("CHK-types", impl_source, extra=shared, sandbox_on=sandbox_on))
+    # Static results (no subprocess): emit before the parallel section so they appear
+    # immediately in the streaming UI even when parallel=True.
     if runtime:
         emit(engine.CheckResult(
             "CHK-symbolic", "crosshair", "unconfirmed",
             detail="not attempted: a runtime-enforced contract over rich types "
                    "(pydantic). Enforced on every call, not proven over all inputs."))
-    else:
-        emit(engine.run_crosshair("CHK-symbolic", decorators, impl_source, function=func,
-                                  extra=shared, sandbox_on=sandbox_on))
-    emit(engine.run_pytest("CHK-prop-shown", "hypothesis_shown", shown_src, impl_source,
-                           deps=dict(shared), sandbox_on=sandbox_on))
-    emit(engine.run_pytest("CHK-prop-heldout", "hypothesis_heldout", heldout_src,
-                           impl_source, deps={"reference_impl.py": ref_src, **shared},
-                           sandbox_on=sandbox_on))
-    if runtime:
-        emit(engine.run_negative_probe_runtime(
-            "CHK-negprobe", signature, decorators, must_reject, shown_src, function=func,
-            prelude=("from models import *\n" if models_src else ""),
-            deps=dict(shared), sandbox_on=sandbox_on))
-    else:
-        emit(engine.run_negative_probe("CHK-negprobe", signature, decorators, must_reject,
-                                       function=func, sandbox_on=sandbox_on))
-    if mutation:
-        emit(engine.run_mutation(
-            "CHK-mutation", impl_source,
-            {"test_shown.py": shown_src, "test_heldout.py": heldout_src,
-             "reference_impl.py": ref_src, **shared},
-            threshold, sandbox_on=sandbox_on))
 
+    # Build the callable task list.  Every entry is a zero-argument callable that
+    # returns a CheckResult; they are all independent and safe to run concurrently.
+    tasks: list[Callable[[], engine.CheckResult]] = [
+        lambda: engine.run_types("CHK-types", impl_source, extra=shared,
+                                 sandbox_on=sandbox_on),
+        lambda: engine.run_pytest("CHK-prop-shown", "hypothesis_shown", shown_src,
+                                  impl_source, deps=dict(shared), sandbox_on=sandbox_on),
+        lambda: engine.run_pytest("CHK-prop-heldout", "hypothesis_heldout", heldout_src,
+                                  impl_source,
+                                  deps={"reference_impl.py": ref_src, **shared},
+                                  sandbox_on=sandbox_on),
+    ]
+
+    if runtime:
+        prelude = "from models import *\n" if models_src else ""
+        tasks.append(
+            lambda: engine.run_negative_probe_runtime(
+                "CHK-negprobe", signature, decorators, must_reject, shown_src,
+                function=func, prelude=prelude, deps=dict(shared),
+                sandbox_on=sandbox_on))
+    else:
+        tasks.append(
+            lambda: engine.run_crosshair("CHK-symbolic", decorators, impl_source,
+                                         function=func, extra=shared,
+                                         sandbox_on=sandbox_on))
+        tasks.append(
+            lambda: engine.run_negative_probe("CHK-negprobe", signature, decorators,
+                                              must_reject, function=func,
+                                              sandbox_on=sandbox_on))
+
+    if mutation:
+        tasks.append(
+            lambda: engine.run_mutation(
+                "CHK-mutation", impl_source,
+                {"test_shown.py": shown_src, "test_heldout.py": heldout_src,
+                 "reference_impl.py": ref_src, **shared},
+                threshold, sandbox_on=sandbox_on))
+
+    if oracle_mutation:
+        tasks.append(
+            lambda: engine.run_oracle_mutation(
+                "CHK-oracle-mut", ref_src, shown_src, heldout_src,
+                threshold, sandbox_on=sandbox_on))
+
+    _dispatch(tasks, emit, parallel=parallel)
     return results, classify(manifest["intent_id"], results)
+
+
+def _dispatch(
+    tasks: list[Callable[[], engine.CheckResult]],
+    emit: Callable[[engine.CheckResult], None],
+    *,
+    parallel: bool,
+) -> None:
+    """Run tasks and call emit for each result, in parallel or sequentially."""
+    if parallel and len(tasks) > 1:
+        with concurrent.futures.ThreadPoolExecutor() as ex:
+            futs = [ex.submit(t) for t in tasks]
+            for fut in concurrent.futures.as_completed(futs):
+                emit(fut.result())
+    else:
+        for t in tasks:
+            emit(t())
 
 
 def _run_multi(
@@ -113,6 +161,8 @@ def _run_multi(
     *,
     sandbox_on: bool,
     mutation: bool,
+    oracle_mutation: bool,
+    parallel: bool,
     on_result: Callable[[engine.CheckResult], None] | None,
 ) -> tuple[dict[str, engine.CheckResult], Classification]:
     """Verify a contract that declares several functions in one module.
@@ -139,33 +189,43 @@ def _run_multi(
     shared = {"models.py": models_src} if models_src else {}
 
     results: dict[str, engine.CheckResult] = {}
+    _lock = threading.Lock()
 
     def emit(key: str, r: engine.CheckResult) -> None:
-        results[key] = r
-        if on_result:
-            on_result(r)
+        with _lock:
+            results[key] = r
+            if on_result:
+                on_result(r)
 
-    # Shared checks, over the whole module, once.
-    types = engine.run_types("CHK-types", impl_source, extra=shared, sandbox_on=sandbox_on)
-    emit("types", types)
-    shown = engine.run_pytest("CHK-prop-shown", "hypothesis_shown", shown_src, impl_source,
-                              deps=dict(shared), sandbox_on=sandbox_on)
-    emit("hypothesis_shown", shown)
-    heldout = engine.run_pytest("CHK-prop-heldout", "hypothesis_heldout", heldout_src,
-                                impl_source, deps={"reference_impl.py": ref_src, **shared},
-                                sandbox_on=sandbox_on)
-    emit("hypothesis_heldout", heldout)
-    mut = None
+    # Build all runnable tasks with their result keys.
+    # Static (no-subprocess) results for runtime-enforced functions are emitted
+    # before the parallel section so they appear immediately in the streaming UI.
+    keyed_tasks: list[tuple[str, Callable[[], engine.CheckResult]]] = [
+        ("types", lambda: engine.run_types("CHK-types", impl_source, extra=shared,
+                                           sandbox_on=sandbox_on)),
+        ("hypothesis_shown", lambda: engine.run_pytest(
+            "CHK-prop-shown", "hypothesis_shown", shown_src, impl_source,
+            deps=dict(shared), sandbox_on=sandbox_on)),
+        ("hypothesis_heldout", lambda: engine.run_pytest(
+            "CHK-prop-heldout", "hypothesis_heldout", heldout_src, impl_source,
+            deps={"reference_impl.py": ref_src, **shared}, sandbox_on=sandbox_on)),
+    ]
+
     if mutation:
-        mut = engine.run_mutation(
-            "CHK-mutation", impl_source,
-            {"test_shown.py": shown_src, "test_heldout.py": heldout_src,
-             "reference_impl.py": ref_src, **shared},
-            threshold, sandbox_on=sandbox_on)
-        emit("mutation", mut)
+        keyed_tasks.append(
+            ("mutation", lambda: engine.run_mutation(
+                "CHK-mutation", impl_source,
+                {"test_shown.py": shown_src, "test_heldout.py": heldout_src,
+                 "reference_impl.py": ref_src, **shared},
+                threshold, sandbox_on=sandbox_on)))
 
-    # Per-function proof and negative-probe, then a per-function verdict.
-    per_function: dict[str, Classification] = {}
+    if oracle_mutation:
+        keyed_tasks.append(
+            ("oracle_mutation", lambda: engine.run_oracle_mutation(
+                "CHK-oracle-mut", ref_src, shown_src, heldout_src,
+                threshold, sandbox_on=sandbox_on)))
+
+    # Per-function tasks, one crosshair and one probe per function.
     for spec in functions:
         name = spec["function"]
         signature = spec["signature"]
@@ -178,29 +238,71 @@ def _run_multi(
         runtime = spec.get("enforcement", manifest.get("enforcement")) == "runtime"
 
         if runtime:
-            crosshair = engine.CheckResult(
+            # Emit the no-op crosshair result immediately; only the probe is a task.
+            _ch = engine.CheckResult(
                 f"CHK-symbolic[{name}]", "crosshair", "unconfirmed",
                 detail=f"[{name}] not attempted: a runtime-enforced contract over rich "
                        "types. Enforced on every call, not proven over all inputs.")
-        else:
-            crosshair = engine.run_crosshair(f"CHK-symbolic[{name}]", decorators,
-                                             impl_source, function=name, extra=shared,
-                                             sandbox_on=sandbox_on)
-        crosshair.detail = f"[{name}] {crosshair.detail}"
-        emit(f"crosshair[{name}]", crosshair)
+            emit(f"crosshair[{name}]", _ch)
+            prelude = "from models import *\n" if models_src else ""
 
-        if runtime:
-            probe = engine.run_negative_probe_runtime(
-                f"CHK-negprobe[{name}]", signature, decorators, must_reject, shown_src,
-                function=name, prelude=("from models import *\n" if models_src else ""),
-                base_src=ref_src, deps=dict(shared), sandbox_on=sandbox_on)
-        else:
-            probe = engine.run_negative_probe(f"CHK-negprobe[{name}]", signature,
-                                              decorators, must_reject, function=name,
-                                              sandbox_on=sandbox_on)
-        probe.detail = f"[{name}] {probe.detail}"
-        emit(f"negative_probe[{name}]", probe)
+            def _make_probe_rt(n=name, sig=signature, decs=decorators,
+                               mrej=must_reject, prel=prelude):
+                def _run():
+                    r = engine.run_negative_probe_runtime(
+                        f"CHK-negprobe[{n}]", sig, decs, mrej, shown_src,
+                        function=n, prelude=prel, base_src=ref_src,
+                        deps=dict(shared), sandbox_on=sandbox_on)
+                    r.detail = f"[{n}] {r.detail}"
+                    return r
+                return _run
 
+            keyed_tasks.append((f"negative_probe[{name}]", _make_probe_rt()))
+        else:
+            def _make_crosshair(n=name, decs=decorators):
+                def _run():
+                    r = engine.run_crosshair(
+                        f"CHK-symbolic[{n}]", decs, impl_source, function=n,
+                        extra=shared, sandbox_on=sandbox_on)
+                    r.detail = f"[{n}] {r.detail}"
+                    return r
+                return _run
+
+            def _make_probe(n=name, sig=signature, decs=decorators, mrej=must_reject):
+                def _run():
+                    r = engine.run_negative_probe(
+                        f"CHK-negprobe[{n}]", sig, decs, mrej, function=n,
+                        sandbox_on=sandbox_on)
+                    r.detail = f"[{n}] {r.detail}"
+                    return r
+                return _run
+
+            keyed_tasks.append((f"crosshair[{name}]", _make_crosshair()))
+            keyed_tasks.append((f"negative_probe[{name}]", _make_probe()))
+
+    # Run all tasks, collecting results.
+    def keyed_emit(key: str, r: engine.CheckResult) -> None:
+        emit(key, r)
+
+    if parallel and len(keyed_tasks) > 1:
+        with concurrent.futures.ThreadPoolExecutor() as ex:
+            fut_map = {ex.submit(task): key for key, task in keyed_tasks}
+            for fut in concurrent.futures.as_completed(fut_map):
+                keyed_emit(fut_map[fut], fut.result())
+    else:
+        for key, task in keyed_tasks:
+            keyed_emit(key, task())
+
+    # Per-function classification (sequential; all results are now available).
+    types = results.get("types")
+    shown = results.get("hypothesis_shown")
+    heldout = results.get("hypothesis_heldout")
+
+    per_function: dict[str, Classification] = {}
+    for spec in functions:
+        name = spec["function"]
+        crosshair = results.get(f"crosshair[{name}]")
+        probe = results.get(f"negative_probe[{name}]")
         per_function[name] = classify_function(
             manifest["intent_id"], types=types, crosshair=crosshair, probe=probe,
             shown=shown, heldout=heldout)
@@ -214,23 +316,23 @@ def _run_multi(
     # Attribute the failure to a function when the failing test names one, since a
     # shared property test cannot self-attribute the way a per-function proof can.
     if overall.classification != FAILED:
-        for shared in (types, shown, heldout):
-            if shared.status == "fail":
-                text = f"{shared.detail or ''} {shared.counterexample or ''}"
+        for shared_r in (types, shown, heldout):
+            if shared_r and shared_r.status == "fail":
+                text = f"{shared_r.detail or ''} {shared_r.counterexample or ''}"
                 # Longest name first, so test_satisfies_all is charged to satisfies_all,
                 # not to satisfies (whose test_ prefix is a substring of it).
                 culprit = next((spec["function"] for spec in
                                 sorted(functions, key=lambda s: len(s["function"]),
                                        reverse=True)
                                 if f"test_{spec['function']}" in text), None)
-                evidence = shared.counterexample or shared.detail
-                reasons = ["module-wide " + shared.kind + " failed"
+                evidence = shared_r.counterexample or shared_r.detail
+                reasons = ["module-wide " + shared_r.kind + " failed"
                            + (f" (function {culprit!r})" if culprit else "")
                            + f": {evidence}"]
                 reasons += [f"{n}: {c.classification}" for n, c in per_function.items()]
                 overall = Classification(
                     manifest["intent_id"], FAILED,
-                    f"{culprit}::{shared.check_id}" if culprit else shared.check_id,
+                    f"{culprit}::{shared_r.check_id}" if culprit else shared_r.check_id,
                     (f"function {culprit!r}: " if culprit else "") + (evidence or ""),
                     requires_human_code_review=True,
                     failed_subtype="buggy-implementation", reasons=reasons)

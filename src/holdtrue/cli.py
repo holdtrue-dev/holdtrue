@@ -103,18 +103,38 @@ def _print_contract(manifest: dict) -> None:
 
 
 def _sandbox_ok(args: argparse.Namespace) -> bool:
-    """Fail closed. holdtrue runs AI-written code, so it will not run it unsandboxed by
-    default: if bwrap is missing, refuse unless --no-sandbox is explicit. With
-    --no-sandbox, warn plainly that the code runs directly on the machine."""
+    """Fail closed. holdtrue runs AI-written code and will not run it unsandboxed by
+    default. Resolve the active sandbox tier and configure sandbox.py accordingly.
+
+    --no-sandbox: warn and run unsandboxed.
+    --sandbox docker: require Docker + holdtrue-sandbox image.
+    --sandbox bwrap (default): require bwrap.
+    """
     if getattr(args, "no_sandbox", False):
         print("  WARNING: --no-sandbox: AI-written code will run directly on this "
               "machine, with no isolation.")
+        sandbox.configure("off")
         return True
-    if not engine.sandbox.bwrap_available():
+
+    kind = getattr(args, "sandbox", "bwrap") or "bwrap"
+    sandbox.configure(kind)
+
+    if kind == "docker":
+        if not sandbox.docker_available():
+            print("  docker not found. Install Docker, or use the default bwrap sandbox.")
+            return False
+        if not sandbox.docker_image_exists():
+            print(f"  Docker image {sandbox.DOCKER_IMAGE!r} not found.\n"
+                  "  Run `holdtrue sandbox build` to create it.")
+            return False
+        print(f"  sandbox: docker ({sandbox.DOCKER_IMAGE})")
+        return True
+
+    if not sandbox.bwrap_available():
         print("  bubblewrap (bwrap) not found. holdtrue sandboxes the AI-written code "
               "it runs and will not run it unsandboxed by default.\n"
-              "  Install bwrap (Linux only), or pass --no-sandbox to run directly on "
-              "this machine.")
+              "  Install bwrap (Linux only), pass --no-sandbox to run directly, or "
+              "use --sandbox docker if Docker is available.")
         return False
     return True
 
@@ -393,6 +413,32 @@ def cmd_providers(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sandbox(args: argparse.Namespace) -> int:
+    action = args.sandbox_action
+    if action == "status":
+        bwrap_ok = sandbox.bwrap_available()
+        docker_ok = sandbox.docker_available()
+        image_ok = sandbox.docker_image_exists()
+        print("\nholdtrue sandbox status")
+        print("-" * 72)
+        print(f"  [{'x' if bwrap_ok else ' '}] bwrap   {sandbox.BWRAP or '(not found)'}")
+        print(f"  [{'x' if docker_ok else ' '}] docker  {sandbox.DOCKER or '(not found)'}")
+        print(f"  [{'x' if image_ok else ' '}]   image  {sandbox.DOCKER_IMAGE}"
+              + ("" if image_ok else "  (run: holdtrue sandbox build)"))
+        print()
+        return 0
+    if action == "build":
+        print(f"\nholdtrue sandbox build — building {sandbox.DOCKER_IMAGE} ...")
+        rc = sandbox.build_docker_image()
+        if rc == 0:
+            print(f"  image {sandbox.DOCKER_IMAGE} built successfully.")
+        else:
+            print(f"  docker build failed (exit {rc}).")
+        return rc
+    print(f"unknown sandbox action: {action!r}")
+    return 1
+
+
 def cmd_studio(args: argparse.Namespace) -> int:
     if not _sandbox_ok(args):
         return 1
@@ -422,6 +468,8 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("--impl", required=True, help="implementation file to verify")
     v.add_argument("--manifest", default="contract/manifest.yaml")
     v.add_argument("--no-sandbox", action="store_true", help="run unsandboxed")
+    v.add_argument("--sandbox", choices=["bwrap", "docker"], default="bwrap",
+                   help="sandbox tier: bwrap (default) or docker")
     v.add_argument("--no-mutation", action="store_true", help="skip mutation testing")
     v.add_argument("--oracle-mutation", action="store_true",
                    help="also mutate the reference oracle (cross-check test-suite strength)")
@@ -468,6 +516,8 @@ def main(argv: list[str] | None = None) -> int:
     ru.add_argument("--yes", action="store_true", help="approve the contract without prompting")
     ru.add_argument("--max-rounds", type=int, default=3)
     ru.add_argument("--no-sandbox", action="store_true")
+    ru.add_argument("--sandbox", choices=["bwrap", "docker"], default="bwrap",
+                    help="sandbox tier: bwrap (default) or docker")
     ru.add_argument("--no-mutation", action="store_true")
     ru.add_argument("--provider", help="which LLM provider to use (default: claude)")
     ru.add_argument("--max-revisions", type=int, default=2,
@@ -510,6 +560,12 @@ def main(argv: list[str] | None = None) -> int:
 
     pr = sub.add_parser("providers", help="list discovered LLM providers")
     pr.set_defaults(func=cmd_providers)
+
+    sb_cmd = sub.add_parser("sandbox", help="manage the holdtrue sandbox environment")
+    sb_sub = sb_cmd.add_subparsers(dest="sandbox_action", required=True)
+    sb_sub.add_parser("status", help="show which sandbox tiers are available")
+    sb_sub.add_parser("build", help="build the holdtrue-sandbox Docker image")
+    sb_cmd.set_defaults(func=cmd_sandbox)
 
     args = p.parse_args(argv)
     try:

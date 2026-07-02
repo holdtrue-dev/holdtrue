@@ -118,6 +118,8 @@ def _sandbox_ok(args: argparse.Namespace) -> bool:
 
     kind = getattr(args, "sandbox", "bwrap") or "bwrap"
     sandbox.configure(kind)
+    if getattr(args, "no_seccomp", False):
+        sandbox.set_seccomp(False)
 
     if kind == "docker":
         if not sandbox.docker_available():
@@ -416,12 +418,16 @@ def cmd_providers(args: argparse.Namespace) -> int:
 def cmd_sandbox(args: argparse.Namespace) -> int:
     action = args.sandbox_action
     if action == "status":
+        import platform
         bwrap_ok = sandbox.bwrap_available()
         docker_ok = sandbox.docker_available()
         image_ok = sandbox.docker_image_exists()
+        seccomp_ok = platform.machine() in ("x86_64", "amd64")
         print("\nholdtrue sandbox status")
         print("-" * 72)
         print(f"  [{'x' if bwrap_ok else ' '}] bwrap   {sandbox.BWRAP or '(not found)'}")
+        print(f"  [{'x' if seccomp_ok else ' '}]   seccomp  BPF filter "
+              f"({'supported' if seccomp_ok else 'x86-64 only'})")
         print(f"  [{'x' if docker_ok else ' '}] docker  {sandbox.DOCKER or '(not found)'}")
         print(f"  [{'x' if image_ok else ' '}]   image  {sandbox.DOCKER_IMAGE}"
               + ("" if image_ok else "  (run: holdtrue sandbox build)"))
@@ -470,6 +476,8 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("--no-sandbox", action="store_true", help="run unsandboxed")
     v.add_argument("--sandbox", choices=["bwrap", "docker"], default="bwrap",
                    help="sandbox tier: bwrap (default) or docker")
+    v.add_argument("--no-seccomp", action="store_true",
+                   help="disable the seccomp BPF filter (bwrap tier only)")
     v.add_argument("--no-mutation", action="store_true", help="skip mutation testing")
     v.add_argument("--oracle-mutation", action="store_true",
                    help="also mutate the reference oracle (cross-check test-suite strength)")
@@ -563,7 +571,8 @@ def main(argv: list[str] | None = None) -> int:
 
     sb_cmd = sub.add_parser("sandbox", help="manage the holdtrue sandbox environment")
     sb_sub = sb_cmd.add_subparsers(dest="sandbox_action", required=True)
-    sb_sub.add_parser("status", help="show which sandbox tiers are available")
+    sb_status = sb_sub.add_parser("status", help="show which sandbox tiers are available")
+    _ = sb_status  # no extra args needed
     sb_sub.add_parser("build", help="build the holdtrue-sandbox Docker image")
     sb_cmd.set_defaults(func=cmd_sandbox)
 

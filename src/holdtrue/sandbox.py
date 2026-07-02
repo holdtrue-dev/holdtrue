@@ -35,6 +35,13 @@ from pathlib import Path
 
 BWRAP = shutil.which("bwrap")
 DOCKER = shutil.which("docker")
+_seccomp_enabled: bool = True  # apply the BPF filter whenever bwrap is used
+
+
+def set_seccomp(enabled: bool) -> None:
+    """Enable or disable the seccomp BPF filter on top of bwrap isolation."""
+    global _seccomp_enabled
+    _seccomp_enabled = enabled
 
 # Docker image used when sandbox="docker".  Build it with `holdtrue sandbox build`.
 DOCKER_IMAGE = "holdtrue-sandbox:latest"
@@ -82,9 +89,13 @@ def docker_image_exists() -> bool:
 
 
 def _bwrap_args(cmd: list[str], rw_dirs: list[str], ro_dirs: list[str],
-                workdir: str | None) -> list[str]:
+                workdir: str | None,
+                seccomp_fd: int | None = None) -> list[str]:
     """Build the bwrap invocation: no network, read-only system and venv, writes
-    confined to rw_dirs. Raises SandboxUnavailable if bwrap is missing."""
+    confined to rw_dirs. Raises SandboxUnavailable if bwrap is missing.
+
+    When seccomp_fd is set, add --seccomp to apply the BPF filter inside the sandbox.
+    """
     if BWRAP is None:
         raise SandboxUnavailable(
             "bubblewrap (bwrap) is not installed, so this untrusted code cannot be "
@@ -106,6 +117,8 @@ def _bwrap_args(cmd: list[str], rw_dirs: list[str], ro_dirs: list[str],
         "--die-with-parent",
         "--new-session",
     ]
+    if seccomp_fd is not None:
+        args += ["--seccomp", str(seccomp_fd)]
     for d in ro_dirs:
         args += ["--ro-bind", d, d]
     for d in rw_dirs:
@@ -169,10 +182,15 @@ def _remap_for_docker(cmd: list[str]) -> list[str]:
 def wrap(cmd: list[str], *, rw_dirs: list[str] | None = None,
          ro_dirs: list[str] | None = None, workdir: str | None = None) -> list[str]:
     """Return `cmd` wrapped in the active sandbox tier, for callers that manage their
-    own subprocess (cosmic-ray). Raises SandboxUnavailable if the sandbox is missing."""
+    own subprocess (cosmic-ray). Raises SandboxUnavailable if the sandbox is missing.
+
+    Note: seccomp is NOT applied here because the caller manages its own Popen and
+    there is no way to pass the fd through. cosmic-ray already runs inside bwrap's
+    namespace isolation; seccomp is belt-and-suspenders applied only in sandbox.run().
+    """
     if _kind == "docker":
         return _docker_args(cmd, rw_dirs or [], ro_dirs or [], workdir)
-    return _bwrap_args(cmd, rw_dirs or [], ro_dirs or [], workdir)
+    return _bwrap_args(cmd, rw_dirs or [], ro_dirs or [], workdir, seccomp_fd=None)
 
 
 def abort_all() -> None:
@@ -207,9 +225,11 @@ def aborted() -> bool:
     return _aborted.is_set()
 
 
-def _spawn(args: list[str], cwd: str | None) -> subprocess.Popen:
+def _spawn(args: list[str], cwd: str | None,
+           pass_fds: tuple[int, ...] = ()) -> subprocess.Popen:
     p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                         text=True, cwd=cwd, start_new_session=True)
+                         text=True, cwd=cwd, start_new_session=True,
+                         pass_fds=pass_fds)
     with _lock:
         _active.add(p)
     return p
@@ -247,16 +267,29 @@ def run(cmd: list[str], *, rw_dirs: list[str] | None = None,
         args = cmd
         cwd = workdir
         sandboxed = False
+        rc, out, err = _collect(_spawn(args, cwd), timeout)
     elif _kind == "docker":
         args = _docker_args(cmd, rw_dirs or [], ro_dirs or [], workdir)
-        cwd = None
         sandboxed = True
+        rc, out, err = _collect(_spawn(args, None), timeout)
     else:
-        args = _bwrap_args(cmd, rw_dirs or [], ro_dirs or [], workdir)
-        cwd = None
-        sandboxed = True
-
-    rc, out, err = _collect(_spawn(args, cwd), timeout)
+        # bwrap, optionally with seccomp BPF filter
+        from . import seccomp as _seccomp  # local import avoids a module-level cycle
+        sec_fd: int | None = None
+        if _seccomp_enabled:
+            sec_fd = _seccomp.open_filter_fd()
+        try:
+            args = _bwrap_args(cmd, rw_dirs or [], ro_dirs or [], workdir,
+                               seccomp_fd=sec_fd)
+            pass_fds = (sec_fd,) if sec_fd is not None else ()
+            sandboxed = True
+            rc, out, err = _collect(_spawn(args, None, pass_fds=pass_fds), timeout)
+        finally:
+            if sec_fd is not None:
+                try:
+                    os.close(sec_fd)
+                except OSError:
+                    pass
     return RunResult(rc, out, err, sandboxed)
 
 

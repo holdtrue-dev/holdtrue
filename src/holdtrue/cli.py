@@ -419,20 +419,33 @@ def _intent_slug(text: str) -> str:
     return "-".join(words) or "project"
 
 
-_PYTEST_INI = """\
-[pytest]
-# holdtrue runs contract tests in a staged workspace where core.py is present.
-# They cannot be collected from the project root — there is no core.py here.
-norecursedirs = contract contract_private .hypothesis .git __pycache__
-"""
+_CONFTEST = '''\
+import importlib.util
+import sys
+from pathlib import Path
+
+# When running pytest directly from the project root, expose the reference
+# oracle as `core` so the contract tests can be collected and run.
+# holdtrue verify stages its own core.py; this conftest only fires for
+# direct pytest runs where no core module exists yet.
+_private = Path(__file__).parent / "contract_private"
+if _private.is_dir():
+    sys.path.insert(0, str(_private))
+    _spec = importlib.util.spec_from_file_location(
+        "core", _private / "reference_impl.py")
+    if _spec and _spec.loader:
+        _mod = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        sys.modules.setdefault("core", _mod)
+'''
 
 
 def _scaffold(project: Path, intent: str) -> None:
     (project / "intent").mkdir(parents=True, exist_ok=True)
     (project / "intent" / "intent.md").write_text(intent, encoding="utf-8")
-    ini = project / "pytest.ini"
-    if not ini.exists():
-        ini.write_text(_PYTEST_INI, encoding="utf-8")
+    cf = project / "conftest.py"
+    if not cf.exists():
+        cf.write_text(_CONFTEST, encoding="utf-8")
 
 
 def cmd_make(args: argparse.Namespace) -> int:

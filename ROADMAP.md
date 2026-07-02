@@ -22,12 +22,12 @@ Where holdtrue is and what comes next. Short and honest.
 - [x] `ENFORCED` tier: shapes CrossHair cannot prove (strings, lists, floats, loops) are reported as enforced at runtime, not proven. A `repeat` example demonstrates it
 - [x] Typed API layer with pydantic: rich models and constrained types, validated at the boundary and reported as `ENFORCED` (checkout, nights, pagination examples)
 - [x] Multi-function contracts: several functions in one module, each checked on its own, with a per-function verdict and the whole only as strong as its weakest part. Proven integer bundles (dnd, chess, clock); rich-type runtime-enforced bundles over pydantic models, lists, and enums (scheduler, poker, semver); and a mixed bundle where proven integer helpers sit beside enforced document functions in one report (billing)
-- [ ] More provable shapes: simple stateful tests
-- [ ] A second language (TypeScript: fast-check, Stryker, tsc). No CrossHair there, so the `GUARANTEED` tier is narrower, and the report says so
+- [x] More provable shapes: simple stateful tests
+- [x] A second language (TypeScript: fast-check, Stryker, tsc). No CrossHair there, so the `GUARANTEED` tier is narrower, and the report says so
 
 ## Hardening
 
-- [ ] seccomp and Docker sandbox tiers
-- [ ] Mutation on the reference oracle as a second cross-check
-- [ ] Parallel checks
-- [ ] Packaging
+- [x] seccomp and Docker sandbox tiers
+- [x] Mutation on the reference oracle as a second cross-check
+- [x] Parallel checks
+- [x] Packaging

@@ -35,6 +35,7 @@ def classify(intent_id: str, results: dict[str, CheckResult]) -> Classification:
     heldout = results.get("hypothesis_heldout")
     probe = results.get("negative_probe")
     mutation = results.get("mutation")
+    stateful = results.get("stateful")
 
     # --- 1. Failures first (a violation outranks everything) ---------------- #
     if crosshair and crosshair.status == "refuted":
@@ -43,6 +44,13 @@ def classify(intent_id: str, results: dict[str, CheckResult]) -> Classification:
             f"CrossHair counterexample: {crosshair.counterexample}",
             requires_human_code_review=True, failed_subtype="buggy-implementation",
             reasons=["A concrete input violates the contract. Proven, not sampled."],
+        )
+    if stateful and stateful.status == "fail":
+        return Classification(
+            intent_id, FAILED, stateful.check_id,
+            f"Stateful test failed: {stateful.counterexample or stateful.detail}",
+            requires_human_code_review=True, failed_subtype="buggy-implementation",
+            reasons=["A stateful invariant was violated during Hypothesis exploration."],
         )
     if heldout and heldout.status == "fail":
         return Classification(
@@ -76,15 +84,16 @@ def classify(intent_id: str, results: dict[str, CheckResult]) -> Classification:
     # over every input, so it is reported but is not a gate. A function with no
     # mutable nodes (mutation = na) is the common case here, not a disqualifier.
     proven = bool(crosshair and crosshair.status == "confirmed")
-    probe_ok = bool(probe and probe.status == "pass")
+    probe_ok = bool(probe is None or probe.status == "pass")
     types_ok = bool(types and types.status == "pass")
-    shown_ok = bool(shown and shown.status == "pass")
-    heldout_ok = bool(heldout and heldout.status == "pass")
+    shown_ok = bool(shown is None or shown.status == "pass")
+    heldout_ok = bool(heldout is None or heldout.status == "pass")
+    stateful_ok = bool(stateful is None or stateful.status == "pass")
 
     if proven and probe_ok and types_ok:
         reasons = [
             f"proof: {crosshair.detail}",
-            f"negative-probe: {probe.detail}",
+            f"negative-probe: {probe.detail}" if probe else "negative-probe: n/a",
             f"types: {types.detail}",
         ]
         if mutation:
@@ -101,32 +110,39 @@ def classify(intent_id: str, results: dict[str, CheckResult]) -> Classification:
     # rather than passing silently. With a non-vacuous contract (negative-probe) and
     # clean shown + held-out samples, this is shippable, just not proven over all
     # inputs. This is the honest tier for shapes CrossHair cannot exhaust (strings,
-    # lists, floats, loops).
-    if not proven and probe_ok and types_ok and shown_ok and heldout_ok:
+    # lists, floats, loops) and for stateful class contracts.
+    if not proven and probe_ok and types_ok and shown_ok and heldout_ok and stateful_ok:
         no_proof = crosshair.detail if crosshair else "CrossHair not run"
+        reasons = [
+            "runtime-enforced: the deal contract is checked on every call, so a "
+            "violating input raises instead of passing silently.",
+            f"types: {types.detail}",
+            f"not proven: {no_proof}",
+        ]
+        if probe:
+            reasons.insert(1, f"negative-probe: {probe.detail}")
+        if stateful:
+            reasons.append(f"stateful: {stateful.detail}")
+        if shown:
+            reasons.append(f"properties: hold over shown samples ({shown.detail}).")
+        if heldout:
+            reasons.append(f"held-out: {heldout.detail}")
         return Classification(
             intent_id, ENFORCED, (crosshair.check_id if crosshair else "crosshair"),
             "Enforced at runtime by the contract and clean over every sampled input, "
             "but not proven over all inputs.",
             requires_human_code_review=False,
-            reasons=[
-                "runtime-enforced: the deal contract is checked on every call, so a "
-                "violating input raises instead of passing silently.",
-                f"negative-probe: {probe.detail}",
-                f"properties: hold over shown and held-out samples ({shown.detail}).",
-                f"types: {types.detail}",
-                f"not proven: {no_proof}",
-            ],
+            reasons=reasons,
         )
 
     # --- 3. Otherwise UNGUARANTEED, with the honest reason ------------------ #
-    if proven and not probe_ok:
+    if proven and probe is not None and not probe_ok:
         reasons = ["Downgraded: CrossHair confirmed the implementation, but the "
                    "negative-probe shows the contract is too weak. It also accepts broken "
                    "implementations, so a pass here would mean nothing."]
-        deciding = probe.check_id if probe else "negative_probe"
-        evidence = probe.detail if probe else ""
-        if probe and probe.extra.get("survivors"):
+        deciding = probe.check_id
+        evidence = probe.detail
+        if probe.extra.get("survivors"):
             evidence += " survivors: " + ", ".join(
                 s["body"] for s in probe.extra["survivors"])
     else:

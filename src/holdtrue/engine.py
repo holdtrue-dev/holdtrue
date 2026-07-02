@@ -354,6 +354,19 @@ def _parse_cr_report(out: str) -> tuple[int, int]:
     return total, surviving
 
 
+def run_stateful(check_id: str, test_source: str, impl_source: str,
+                 *, deps: dict[str, str] | None = None,
+                 sandbox_on: bool = True, timeout: float = 120.0) -> CheckResult:
+    """Run a Hypothesis RuleBasedStateMachine test against the implementation.
+
+    Stateful tests define a state machine with @initialize, @rule, and @invariant
+    methods.  Hypothesis explores sequences of operations and checks invariants after
+    each step.  This is mechanically identical to run_pytest; the distinction is
+    conceptual: the test file is a stateful machine, not a property function."""
+    return run_pytest(check_id, "stateful", test_source, impl_source,
+                      deps=deps, sandbox_on=sandbox_on, timeout=timeout)
+
+
 def run_oracle_mutation(check_id: str, oracle_source: str, shown_src: str,
                          heldout_src: str, threshold: float, *,
                          sandbox_on: bool = True,

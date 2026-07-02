@@ -84,6 +84,30 @@ def _provider(args: argparse.Namespace):
         return None
 
 
+def _author_hints(args: argparse.Namespace) -> str:
+    """Build the hints string passed to spawn_author() from CLI flags."""
+    lines = []
+    lang = getattr(args, "language", None)
+    if lang == "typescript":
+        lines.append(
+            "Write a TypeScript contract. Set `language: typescript` in the manifest. "
+            "Use the TypeScript format (fast-check, jest, tsc) not the Python format. "
+            "GUARANTEED is not achievable; aim for ENFORCED.")
+    if getattr(args, "stateful", False):
+        lines.append(
+            "Write a stateful contract. Set `checks.stateful: true` in the manifest "
+            "and use Hypothesis RuleBasedStateMachine for the shown and held-out tests.")
+    if getattr(args, "enforced", False):
+        lines.append(
+            "Write an ENFORCED contract. Set `enforcement: runtime` in the manifest. "
+            "The function involves types CrossHair cannot prove (lists, strings, floats). "
+            "Aim for ENFORCED, not GUARANTEED.")
+    mt = getattr(args, "mutation_threshold", None)
+    if mt is not None:
+        lines.append(f"Set `checks.mutation.threshold` to {mt} in the manifest.")
+    return "\n".join(lines)
+
+
 def _on_result(r: engine.CheckResult) -> None:
     print(f"  {r.status.upper():11} {r.kind:18} {r.detail[:60]}")
 
@@ -226,7 +250,7 @@ def cmd_author(args: argparse.Namespace) -> int:
     template = Path(args.template).resolve()
     print(f"\nholdtrue author  {project.name}")
     print(f"  spawning contract author in a separate context (provider: {prov.name}) ...")
-    agents.spawn_author(project, template, prov)
+    agents.spawn_author(project, template, prov, hints=_author_hints(args))
     if not (project / "contract" / "manifest.yaml").exists():
         print("  author did not produce contract/manifest.yaml.")
         return 1
@@ -342,7 +366,8 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     if not args.skip_author:
         print(f"\n[1] author: writing the contract in a separate context (provider: {prov.name}) ...")
-        agents.spawn_author(project, Path(args.template).resolve(), prov)
+        agents.spawn_author(project, Path(args.template).resolve(), prov,
+                            hints=_author_hints(args))
     if not (project / "contract" / "manifest.yaml").exists():
         print("  no contract present.")
         return 1
@@ -601,6 +626,14 @@ def main(argv: list[str] | None = None) -> int:
     au.add_argument("--no-sandbox", action="store_true",
                     help="run the self-check unsandboxed (runs code directly)")
     au.add_argument("--provider", help="which LLM provider to use (default: claude)")
+    au.add_argument("--language", choices=["python", "typescript"], default=None,
+                    help="target language for the contract (default: python)")
+    au.add_argument("--stateful", action="store_true",
+                    help="ask the author to write a stateful (RuleBasedStateMachine) contract")
+    au.add_argument("--enforced", action="store_true",
+                    help="ask the author to write an ENFORCED (runtime) contract")
+    au.add_argument("--mutation-threshold", type=float, default=None, metavar="FLOAT",
+                    help="mutation score threshold to set in the manifest (0.0-1.0)")
     au.set_defaults(func=cmd_author)
 
     tu = sub.add_parser("tui", help="live dashboard: run a verification and watch it stream")
@@ -633,6 +666,14 @@ def main(argv: list[str] | None = None) -> int:
     mk.add_argument("--no-revise", action="store_true")
     mk.add_argument("--auto-revise", action="store_true")
     mk.add_argument("--cross-check", action="store_true")
+    mk.add_argument("--language", choices=["python", "typescript"], default=None,
+                    help="target language for the contract (default: python)")
+    mk.add_argument("--stateful", action="store_true",
+                    help="ask the author to write a stateful (RuleBasedStateMachine) contract")
+    mk.add_argument("--enforced", action="store_true",
+                    help="ask the author to write an ENFORCED (runtime) contract")
+    mk.add_argument("--mutation-threshold", type=float, default=None, metavar="FLOAT",
+                    help="mutation score threshold to set in the manifest (0.0-1.0)")
     mk.set_defaults(func=cmd_make)
 
     ru = sub.add_parser("run",
@@ -658,6 +699,14 @@ def main(argv: list[str] | None = None) -> int:
                     help="apply a revision automatically when it passes the ratchet (else ask)")
     ru.add_argument("--cross-check", action="store_true",
                     help="a second author cross-checks the contract for a missing axis")
+    ru.add_argument("--language", choices=["python", "typescript"], default=None,
+                    help="target language for the contract (default: python)")
+    ru.add_argument("--stateful", action="store_true",
+                    help="ask the author to write a stateful (RuleBasedStateMachine) contract")
+    ru.add_argument("--enforced", action="store_true",
+                    help="ask the author to write an ENFORCED (runtime) contract")
+    ru.add_argument("--mutation-threshold", type=float, default=None, metavar="FLOAT",
+                    help="mutation score threshold to set in the manifest (0.0-1.0)")
     ru.set_defaults(func=cmd_run)
 
     cc = sub.add_parser("cross-check",

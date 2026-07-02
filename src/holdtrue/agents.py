@@ -94,14 +94,17 @@ manifest.yaml must contain:
   acceptance: { target_class: GUARANTEED }
 
 Two kinds of contract, pick by the intent:
-- PROVABLE (preferred for pure integer arithmetic with no loops): keep to int so
-  CrossHair can exhaust it, and aim for GUARANTEED. This is the default.
-- ENFORCED (for rich types: strings, dates, money, structured data): follow the
-  worked example's pydantic pattern. Define the types in contract/models.py, add
-  `models: "models.py"` and `enforcement: runtime` to the manifest, and use those
-  types in the signature. CrossHair is skipped; the contract is checked at runtime.
-  Aim for ENFORCED. If the worked example has a contract/models.py, read it and
-  mirror its style.
+- PROVABLE: ALL inputs are `int` or `bool`, no collections, no loops in the function
+  body. CrossHair exhausts `int` domains quickly. Aim for GUARANTEED.
+- ENFORCED: anything with `List`, `Sequence`, `Tuple`, `Set`, `Dict`, `str`, `float`,
+  or structured/pydantic types. CrossHair cannot prove properties over these in finite
+  time. Add `enforcement: runtime` to the manifest — the deal decorators then enforce
+  the contract on every call instead of being proven. Aim for ENFORCED.
+  If the worked example has a contract/models.py, define shared types there and add
+  `models: "models.py"` to the manifest; otherwise no models.py is needed.
+
+When in doubt, choose ENFORCED. A wrong PROVABLE choice produces "search aborted";
+ENFORCED is always better than UNGUARANTEED.
 
 MANY FUNCTIONS: if the intent describes several functions, do NOT force them into one.
 Drop the top-level `signature`/`function`/`checks.crosshair` and instead list them

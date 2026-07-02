@@ -63,6 +63,14 @@ Hard rules:
 - Edit only files under contract/ and contract_private/.
 - Write contract/revision_note.md: one short paragraph explaining what was wrong and
   what you changed, in plain language for the human who approves it.
+
+If the failure is CrossHair aborting ("search aborted" / "timeout" / "iteration
+limit"), this is NOT a logic error — CrossHair cannot exhaust the domain because the
+inputs are lists, strings, floats, or other types with infinite symbolic paths. The
+correct fix is to switch to ENFORCED mode: add `enforcement: runtime` to manifest.yaml
+and change `acceptance.target_class` to ENFORCED. Keep the `checks.crosshair.decorators`
+block — those decorators enforce the contract at runtime instead of being proven. Do
+NOT just tighten the precondition bounds; that will not help.
 """
 
 

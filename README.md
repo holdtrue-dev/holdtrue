@@ -110,6 +110,40 @@ holdtrue studio
 holdtrue run examples/clamp --yes
 ```
 
+## holdtrue make
+
+`holdtrue make` takes an intent and drives the whole pipeline from a blank directory to a verdict.
+
+```bash
+holdtrue make "sort a list of integers"
+holdtrue make @intent.md --no-review     # skip the contract approval prompt
+holdtrue make "clamp(x, lo, hi)" --studio  # open the TUI instead
+```
+
+The project directory is named from the first four words of the intent and written to the current directory. Pass `--out <dir>` to choose a different location.
+
+**files written to the project:**
+
+| file | written by | what it is |
+| --- | --- | --- |
+| `intent/intent.md` | scaffold | the intent you passed in |
+| `conftest.py` | scaffold | lets `pytest .` run against the reference oracle |
+| `contract/manifest.yaml` | author | the machine-checkable contract |
+| `contract/tests_shown/test_<name>.py` | author | Hypothesis property tests the implementer may see |
+| `contract_private/reference_impl.py` | author | the private reference oracle |
+| `contract_private/tests_heldout/test_<name>_heldout.py` | author | held-out differential tests comparing the implementation against the oracle |
+| `reports/evidence_report.md` | verify | human-readable verdict with evidence |
+| `reports/evidence_report.json` | verify | same report, machine-readable |
+
+Two files appear only if the contract needed revision during the run:
+
+| file | what it is |
+| --- | --- |
+| `revisions/CHANGELOG.md` | every proposed contract change, with its reason |
+| `revisions/revisions.jsonl` | same log, machine-readable |
+
+The generated implementation (`src/core.py`) lives only in a temp workspace during the run and is not saved back to the project.
+
 ## examples
 
 Every example ships an intent, a contract, a private reference oracle with held-out tests, and correct and buggy controls. Point `holdtrue verify` at any of them.

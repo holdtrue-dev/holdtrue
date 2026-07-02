@@ -166,9 +166,30 @@ holdtrue verify examples/billing --impl examples/billing/controls/correct.py
 holdtrue verify examples/scheduler --impl examples/scheduler/controls/correct.py
 ```
 
+## supported languages
+
+holdtrue ships six language plugins. Pass `--language <name>` to `make`, `run`, or `author`.
+
+| language | flag | type checks | property tests | mutation | symbolic proof | ceiling |
+| --- | --- | --- | --- | --- | --- | --- |
+| Python | `python` (default) | mypy --strict | Hypothesis | cosmic-ray | CrossHair | 🟢 GUARANTEED |
+| TypeScript | `typescript` | tsc | jest + fast-check | Stryker | — | 🔵 ENFORCED |
+| Rust | `rust` | cargo build | proptest | cargo-mutants | Kani (optional) | 🟢 GUARANTEED* |
+| Go | `go` | go vet | rapid | gremlins | — | 🔵 ENFORCED |
+| Java | `java` | javac + mvn | jqwik | PIT | — | 🔵 ENFORCED |
+| C# | `csharp` | dotnet build | FsCheck | Stryker.NET | — | 🔵 ENFORCED |
+
+\* Rust reaches GUARANTEED only when [Kani](https://model-checking.github.io/kani/) is installed (`cargo install kani-verifier`). Without it, the verdict caps at ENFORCED.
+
+Python is the only language where GUARANTEED is always available, because CrossHair ships as a Python package and needs no separate install.
+
+**Adding a language.** Subclass `Language` in `src/holdtrue/languages/` and register the instance in `languages/__init__.py`. The three methods to implement are `available()`, `author_instructions()`, and `run_checks()`. The registry picks it up on the next import and the CLI gains the new `--language` choice automatically.
+
 ## powered by
 
 A verdict is only as trustworthy as the tools it rests on. Each of these does one job:
+
+**Python toolchain**
 
 | | why it is here |
 | --- | --- |
@@ -178,6 +199,26 @@ A verdict is only as trustworthy as the tools it rests on. Each of these does on
 | [![pydantic](https://img.shields.io/badge/pydantic-rich%20types-2bbf57?style=for-the-badge&logo=pydantic&logoColor=white)](https://github.com/pydantic/pydantic) | Runtime validation for rich types. It enforces the model bounds on every call, which is what makes 🔵 `ENFORCED` an honest tier and not a guess. |
 | [![cosmic-ray](https://img.shields.io/badge/cosmic--ray-mutation-2bbf57?style=for-the-badge)](https://github.com/sixty-north/cosmic-ray) | Mutation testing. It breaks the code on purpose to confirm the tests would notice, so a green run is not false comfort. |
 | [![mypy](https://img.shields.io/badge/mypy-types-2bbf57?style=for-the-badge&logo=python&logoColor=white)](https://github.com/python/mypy) | Static typing. `mypy --strict` is the first gate: the implementation has to type-check before any other check runs. |
+
+**TypeScript toolchain**
+
+| | why it is here |
+| --- | --- |
+| [![fast-check](https://img.shields.io/badge/fast--check-properties-2bbf57?style=for-the-badge)](https://github.com/dubzzz/fast-check) | Property-based testing for TypeScript. Equivalent role to Hypothesis. |
+| [![Stryker](https://img.shields.io/badge/Stryker-mutation-2bbf57?style=for-the-badge)](https://stryker-mutator.io) | Mutation testing for TypeScript/JavaScript. Equivalent role to cosmic-ray. |
+
+**Rust toolchain**
+
+| | why it is here |
+| --- | --- |
+| [![proptest](https://img.shields.io/badge/proptest-properties-2bbf57?style=for-the-badge)](https://github.com/proptest-rs/proptest) | Property-based testing for Rust. Equivalent role to Hypothesis. |
+| [![Kani](https://img.shields.io/badge/Kani-proof-2bbf57?style=for-the-badge)](https://model-checking.github.io/kani/) | Model checker for Rust. When installed, it can exhaust the input space and earn 🟢 `GUARANTEED`, the same tier as CrossHair for Python. |
+| [![cargo-mutants](https://img.shields.io/badge/cargo--mutants-mutation-2bbf57?style=for-the-badge)](https://mutants.rs) | Mutation testing for Rust. Equivalent role to cosmic-ray. |
+
+**Sandbox**
+
+| | why it is here |
+| --- | --- |
 | [![bubblewrap](https://img.shields.io/badge/bubblewrap-sandbox-2bbf57?style=for-the-badge)](https://github.com/containers/bubblewrap) | Unprivileged sandboxing. Every check runs code an AI just wrote, so it runs boxed, with no path to your files. |
 
 ## security

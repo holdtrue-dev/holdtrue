@@ -46,6 +46,11 @@ holdtrue = "holdtrue.cli:main"
 requires = ["uv_build>=0.9.28,<0.10.0"]
 build-backend = "uv_build"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["examples", "src", ".venv", "build", "dist",
+                 ".hypothesis", ".git", "__pycache__", "*.egg"]
+
 [dependency-groups]
 dev = [
     "ruff>=0.15.20",

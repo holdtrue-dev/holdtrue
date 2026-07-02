@@ -12,6 +12,7 @@ from typing import Callable
 import yaml
 
 from . import engine
+from . import languages as _langs
 from .classify import (Classification, FAILED, classify, classify_function,
                        classify_multi)
 
@@ -46,6 +47,14 @@ def run_verification(
     parallel: bool = True,
     on_result: Callable[[engine.CheckResult], None] | None = None,
 ) -> tuple[dict[str, engine.CheckResult], Classification]:
+    lang_name = manifest.get("language", "python")
+    lang = _langs.get(lang_name)
+    if lang is not None:
+        return lang.run_checks(project, impl_path, manifest,
+                               sandbox_on=sandbox_on, mutation=mutation,
+                               oracle_mutation=oracle_mutation, parallel=parallel,
+                               on_result=on_result)
+    # Inline legacy path (safety net if registry is empty).
     if "functions" in manifest:
         return _run_multi(project, impl_path, manifest, sandbox_on=sandbox_on,
                           mutation=mutation, oracle_mutation=oracle_mutation,

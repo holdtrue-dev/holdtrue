@@ -18,6 +18,7 @@ from typing import Callable
 
 import yaml
 
+from . import languages as _langs
 from . import providers
 from .providers import AGENT, API, OUTPUT_RULES, Provider, write_blocks
 
@@ -266,16 +267,26 @@ def spawn_implementer(workspace: Path, manifest: dict, provider: Provider, *,
 
 def spawn_author(project: Path, template: Path, provider: Provider, *,
                  hints: str = "",
+                 language: str | None = None,
                  timeout: float = 600.0,
                  on_output: Callable[[str], None] | None = None) -> str:
     """Run a fresh, scoped context that writes the contract bundle from the intent.
     Separate context from the implementer.
 
     `hints` is appended to the prompt before the intent, allowing CLI flags
-    (--language, --stateful, --enforced) to override author defaults."""
+    (--language, --stateful, --enforced) to override author defaults.
+    `language`, when given, injects that language plugin's author_instructions()."""
+    lang_instructions = ""
+    if language:
+        lang = _langs.get(language)
+        if lang is not None:
+            lang_instructions = lang.author_instructions()
+
     can_read_outside = provider.kind == AGENT and getattr(provider, "accepts_dirs", False)
     if can_read_outside:
         prompt = _AUTHOR_PROMPT.replace("__TEMPLATE__", str(template))
+        if lang_instructions:
+            prompt += f"\n\nLanguage-specific instructions:\n{lang_instructions}"
         if hints:
             prompt += f"\n\nAdditional instructions for this contract:\n{hints}"
         return provider.run(prompt, project, extra_dirs=(template,), timeout=timeout,
@@ -283,6 +294,8 @@ def spawn_author(project: Path, template: Path, provider: Provider, *,
 
     prompt = _AUTHOR_PROMPT.replace("__TEMPLATE__", "the worked example below")
     prompt += _inline_template(template)
+    if lang_instructions:
+        prompt += f"\n\nLanguage-specific instructions:\n{lang_instructions}"
     if hints:
         prompt += f"\n\nAdditional instructions for this contract:\n{hints}"
     if provider.kind == API:

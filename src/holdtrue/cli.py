@@ -11,8 +11,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import (agents, changelog, crosscheck, engine, providers, report, revise,
-               sandbox, verify)
+from . import (agents, changelog, crosscheck, engine, languages, providers,
+               report, revise, sandbox, verify)
 from .classify import ENFORCED, FAILED, GUARANTEED
 
 
@@ -85,14 +85,9 @@ def _provider(args: argparse.Namespace):
 
 
 def _author_hints(args: argparse.Namespace) -> str:
-    """Build the hints string passed to spawn_author() from CLI flags."""
+    """Build the hints string passed to spawn_author() from CLI flags.
+    Language-specific instructions are injected via spawn_author(language=...) instead."""
     lines = []
-    lang = getattr(args, "language", None)
-    if lang == "typescript":
-        lines.append(
-            "Write a TypeScript contract. Set `language: typescript` in the manifest. "
-            "Use the TypeScript format (fast-check, jest, tsc) not the Python format. "
-            "GUARANTEED is not achievable; aim for ENFORCED.")
     if getattr(args, "stateful", False):
         lines.append(
             "Write a stateful contract. Set `checks.stateful: true` in the manifest "
@@ -250,7 +245,8 @@ def cmd_author(args: argparse.Namespace) -> int:
     template = Path(args.template).resolve()
     print(f"\nholdtrue author  {project.name}")
     print(f"  spawning contract author in a separate context (provider: {prov.name}) ...")
-    agents.spawn_author(project, template, prov, hints=_author_hints(args))
+    agents.spawn_author(project, template, prov, hints=_author_hints(args),
+                        language=getattr(args, "language", None))
     if not (project / "contract" / "manifest.yaml").exists():
         print("  author did not produce contract/manifest.yaml.")
         return 1
@@ -367,7 +363,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     if not args.skip_author:
         print(f"\n[1] author: writing the contract in a separate context (provider: {prov.name}) ...")
         agents.spawn_author(project, Path(args.template).resolve(), prov,
-                            hints=_author_hints(args))
+                            hints=_author_hints(args),
+                            language=getattr(args, "language", None))
     if not (project / "contract" / "manifest.yaml").exists():
         print("  no contract present.")
         return 1
@@ -626,7 +623,7 @@ def main(argv: list[str] | None = None) -> int:
     au.add_argument("--no-sandbox", action="store_true",
                     help="run the self-check unsandboxed (runs code directly)")
     au.add_argument("--provider", help="which LLM provider to use (default: claude)")
-    au.add_argument("--language", choices=["python", "typescript"], default=None,
+    au.add_argument("--language", choices=languages.names(), default=None,
                     help="target language for the contract (default: python)")
     au.add_argument("--stateful", action="store_true",
                     help="ask the author to write a stateful (RuleBasedStateMachine) contract")
@@ -666,7 +663,7 @@ def main(argv: list[str] | None = None) -> int:
     mk.add_argument("--no-revise", action="store_true")
     mk.add_argument("--auto-revise", action="store_true")
     mk.add_argument("--cross-check", action="store_true")
-    mk.add_argument("--language", choices=["python", "typescript"], default=None,
+    mk.add_argument("--language", choices=languages.names(), default=None,
                     help="target language for the contract (default: python)")
     mk.add_argument("--stateful", action="store_true",
                     help="ask the author to write a stateful (RuleBasedStateMachine) contract")
@@ -699,7 +696,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="apply a revision automatically when it passes the ratchet (else ask)")
     ru.add_argument("--cross-check", action="store_true",
                     help="a second author cross-checks the contract for a missing axis")
-    ru.add_argument("--language", choices=["python", "typescript"], default=None,
+    ru.add_argument("--language", choices=languages.names(), default=None,
                     help="target language for the contract (default: python)")
     ru.add_argument("--stateful", action="store_true",
                     help="ask the author to write a stateful (RuleBasedStateMachine) contract")

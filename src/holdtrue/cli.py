@@ -404,6 +404,80 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _intent_slug(text: str) -> str:
+    words, buf = [], []
+    for ch in text.lower():
+        if ch.isalnum():
+            buf.append(ch)
+        elif buf:
+            words.append("".join(buf))
+            buf = []
+            if len(words) == 4:
+                break
+    if buf and len(words) < 4:
+        words.append("".join(buf))
+    return "-".join(words) or "project"
+
+
+def _scaffold(project: Path, intent: str) -> None:
+    (project / "intent").mkdir(parents=True, exist_ok=True)
+    (project / "intent" / "intent.md").write_text(intent, encoding="utf-8")
+
+
+def cmd_make(args: argparse.Namespace) -> int:
+    """From intent to verified artifact: scaffold, author, implement, verify."""
+    # 1. Resolve intent text
+    raw = args.intent or ""
+    if raw == "-":
+        raw = sys.stdin.read()
+    elif raw.startswith("@"):
+        raw = Path(raw[1:]).expanduser().read_text(encoding="utf-8")
+    if not raw.strip():
+        print("no intent. Pass text, @file, or - (stdin).")
+        return 1
+
+    # 2. Determine project dir
+    project = Path(args.out).resolve() if args.out else Path.cwd() / _intent_slug(raw)
+    intent_file = project / "intent" / "intent.md"
+    if project.exists() and not intent_file.exists():
+        print(f"  {project} exists but is not a holdtrue project (no intent/intent.md).\n"
+              "  Choose a different --out or remove it.")
+        return 1
+
+    _scaffold(project, raw)
+    print(f"\nholdtrue make  {project.name}")
+    print(f"  project : {project}")
+    print(f"  intent  : {raw.splitlines()[0][:72]}")
+
+    # 3a. --studio: open the TUI with the intent pre-loaded
+    if args.studio:
+        if not _sandbox_ok(args):
+            return 1
+        try:
+            from . import studio as _studio
+        except ModuleNotFoundError:
+            print("textual is not installed (needed for studio): uv add textual")
+            return 1
+        _studio.run_studio(project, Path(args.template).resolve(),
+                           sandbox_on=not args.no_sandbox,
+                           mutation=not args.no_mutation,
+                           provider_name=args.provider,
+                           model=getattr(args, "model", None),
+                           name=project.name, intent=raw)
+        return 0
+
+    # 3b. CLI mode: scaffold and hand off to the run loop
+    prov = _provider(args)
+    if prov is None:
+        return 1
+    args.project = str(project)
+    args.skip_author = False
+    args.manifest = "contract/manifest.yaml"
+    if args.no_review:
+        args.yes = True
+    return cmd_run(args)
+
+
 def cmd_providers(args: argparse.Namespace) -> int:
     avail = {p.name for p in providers.discover()}
     print("\nholdtrue providers")
@@ -512,6 +586,30 @@ def main(argv: list[str] | None = None) -> int:
     tu.add_argument("--no-sandbox", action="store_true")
     tu.add_argument("--no-mutation", action="store_true")
     tu.set_defaults(func=cmd_tui)
+
+    mk = sub.add_parser("make",
+                        help="from intent to verified artifact: scaffold, author, implement, verify")
+    mk.add_argument("intent", nargs="?", default=None,
+                    help="intent text, @path to a file, or - to read from stdin")
+    mk.add_argument("--out", help="directory to create the project in (default: ./<slug>)")
+    mk.add_argument("--no-review", action="store_true",
+                    help="skip human approval of the generated contract")
+    mk.add_argument("--studio", action="store_true",
+                    help="open the TUI studio instead of running the CLI loop")
+    mk.add_argument("--template", default="examples/clamp")
+    mk.add_argument("--model", help="model for an API provider (studio mode)")
+    mk.add_argument("--yes", action="store_true", help=argparse.SUPPRESS)
+    mk.add_argument("--max-rounds", type=int, default=3)
+    mk.add_argument("--no-sandbox", action="store_true")
+    mk.add_argument("--sandbox", choices=["bwrap", "docker"], default="bwrap")
+    mk.add_argument("--no-seccomp", action="store_true")
+    mk.add_argument("--no-mutation", action="store_true")
+    mk.add_argument("--provider", help="which LLM provider to use (default: claude)")
+    mk.add_argument("--max-revisions", type=int, default=2)
+    mk.add_argument("--no-revise", action="store_true")
+    mk.add_argument("--auto-revise", action="store_true")
+    mk.add_argument("--cross-check", action="store_true")
+    mk.set_defaults(func=cmd_make)
 
     ru = sub.add_parser("run",
                         help="full loop: author -> approve -> implement -> verify (re-spawn on failure)")
